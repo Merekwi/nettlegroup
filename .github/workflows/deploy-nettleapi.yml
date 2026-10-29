@@ -1,0 +1,50 @@
+name: Deploy Nettle API
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "neon.ts"
+      - "neon-function/**"
+      - ".github/workflows/deploy-nettleapi.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nettleapi-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install API dependencies
+        working-directory: neon-function
+        run: npm install --no-audit --no-fund
+
+      - name: Verify required dependency
+        working-directory: neon-function
+        run: node -e "require.resolve('pg'); console.log('pg dependency resolved')"
+
+      - name: Check Neon credentials
+        run: |
+          if [ -z "$NEON_API_KEY" ]; then
+            echo "::error::GitHub Actions secret NEON_API_KEY is missing. Add the existing Neon API key under repository Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Deploy existing Neon function
+        run: npx --yes neon@latest functions deploy nettleapi --project-id dry-shape-51006688 --branch-id br-little-union-b9iipjfz
