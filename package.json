@@ -8,7 +8,6 @@
   },
   "dependencies": {
     "@neon/config": "^1.0.0",
-    "@neon/functions": "^1.0.0",
     "hono": "^4.9.0",
     "pg": "^8.16.3"
   },
