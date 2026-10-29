@@ -1,0 +1,27 @@
+name: API syntax check
+on:
+  push:
+    branches: [main]
+    paths:
+      - "api/**"
+      - "backend/api-handler.js"
+      - "package.json"
+      - ".github/workflows/api-check.yml"
+  pull_request:
+    paths:
+      - "api/**"
+      - "backend/api-handler.js"
+      - "package.json"
+      - ".github/workflows/api-check.yml"
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check shared handler
+        run: node --check backend/api-handler.js
+      - name: Check API route files
+        run: find api -type f -name '*.js' -print0 | xargs -0 -n1 node --check
