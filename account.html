@@ -38,7 +38,9 @@
  function status(id,message,error){const el=$(id);el.textContent=message||"";el.classList.toggle("error",!!error);}
  const API_BASE="https://api.nettlegroup.space";
  async function api(path,opts={}){
-   const response=await fetch(API_BASE+path,{credentials:"include",...opts,headers:{"Content-Type":"application/json",...(opts.headers||{})}});
+   const headers={...(opts.headers||{})};
+   if(opts.body!==undefined&&opts.body!==null&&!headers["Content-Type"]&&!headers["content-type"])headers["Content-Type"]="application/json";
+   const response=await fetch(API_BASE+path,{credentials:"include",...opts,headers});
    let data={};try{data=await response.json()}catch(_){}
    if(!response.ok)throw new Error(data.error||("HTTP "+response.status));
    return data;
