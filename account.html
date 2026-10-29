@@ -81,13 +81,13 @@
        const approve=document.createElement("button");approve.className="account-button";approve.textContent="Одобрить";
        approve.addEventListener("click",async()=>{if(!confirm("Подтвердить оплату и выдать доступ?"))return;try{await api("/api/admin/ticket-decision",{method:"POST",body:JSON.stringify({ticketId:t.id,decision:"approved",comment:"Оплата подтверждена"})});await loadTickets()}catch(e){alert(e.message)}});
        const reject=document.createElement("button");reject.className="account-button danger";reject.textContent="Отклонить";
-       reject.addEventListener("click",async()=>{const comment=prompt("Причина отказа (обязательно):");if(!comment||!comment.trim())return;try{await api("/api/admin/tickets/"+t.id+"/decision",{method:"POST",body:JSON.stringify({ticketId:t.id,decision:"rejected",comment})});await loadTickets()}catch(e){alert(e.message)}});
+       reject.addEventListener("click",async()=>{const comment=prompt("Причина отказа (обязательно):");if(!comment||!comment.trim())return;try{await api("/api/admin/ticket-decision",{method:"POST",body:JSON.stringify({ticketId:t.id,decision:"rejected",comment})});await loadTickets()}catch(e){alert(e.message)}});
        actions.append(approve,reject);admin.appendChild(actions);$("adminTickets").appendChild(admin);
      }
    });
    if(currentUser&&currentUser.isAdmin&&!tickets.some(t=>t.status==="paid_submitted"))$("adminTickets").textContent="Нет заявок, ожидающих проверки.";
  }
- async function refresh(){
+ async async function refresh(){
    const data=await api("/api/session");
    if(!data.authenticated){currentUser=null;$("loginPanel").classList.remove("account-hidden");$("dashboard").classList.add("account-hidden");return}
    currentUser=data.user;$("loginPanel").classList.add("account-hidden");$("dashboard").classList.remove("account-hidden");
