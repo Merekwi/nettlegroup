@@ -110,7 +110,36 @@ jobs:
               if (response.headers.get("access-control-allow-origin") !== origin) {
                 throw new Error("GET response has an incorrect Access-Control-Allow-Origin");
               }
-              console.log("API smoke test passed: OPTIONS 204 and GET /api/session " + response.status);
+              // Check the custom hostname as well as the Neon-native URL.
+              const customBase = "https://api.nettlegroup.space";
+              const customPreflight = await fetch(customBase + "/api/session", {
+                method: "OPTIONS",
+                headers: {
+                  Origin: origin,
+                  "Access-Control-Request-Method": "GET",
+                  "Access-Control-Request-Headers": "content-type",
+                },
+              });
+              if (customPreflight.status !== 204) {
+                throw new Error("Custom domain OPTIONS expected 204, received " + customPreflight.status);
+              }
+              if (customPreflight.headers.get("access-control-allow-origin") !== origin ||
+                  customPreflight.headers.get("access-control-allow-credentials") !== "true") {
+                throw new Error("Custom domain OPTIONS returned incorrect CORS headers");
+              }
+
+              const customResponse = await fetch(customBase + "/api/session", {
+                headers: { Origin: origin },
+              });
+              const customData = await customResponse.json();
+              if (!customResponse.ok || typeof customData.authenticated !== "boolean") {
+                throw new Error("Custom domain GET /api/session failed with HTTP " + customResponse.status);
+              }
+              if (customResponse.headers.get("access-control-allow-origin") !== origin) {
+                throw new Error("Custom domain GET response has an incorrect Access-Control-Allow-Origin");
+              }
+
+              console.log("API smoke test passed: native and custom domain CORS/session endpoints");
               process.exit(0);
             } catch (error) {
               lastError = error;
