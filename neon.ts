@@ -5,6 +5,7 @@ export default defineConfig({
     nettleapi: {
       name: "Nettle Group API",
       source: "neon-function/index.mjs",
+      externalPackages: ["pg"],
       env: {
         TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN!,
         INITIAL_ADMIN_TELEGRAM_ID: process.env.INITIAL_ADMIN_TELEGRAM_ID!,
