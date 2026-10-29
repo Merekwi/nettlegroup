@@ -1,0 +1,12 @@
+{
+  "name": "nettle-group-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Server-side Telegram authentication and admin API for Nettle Group",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}
