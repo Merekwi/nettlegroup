@@ -80,7 +80,7 @@
  }
  async function loadAdminTickets(){
    const wrap=$("adminTickets");wrap.replaceChildren();
-   const data=await api("/api/admin/tickets");
+   const data=await api("/api/tickets");
    const pending=(data.tickets||[]).filter(t=>t.status==="paid_submitted");
    if(!pending.length){wrap.textContent="Нет заявок, ожидающих проверки.";return}
    pending.forEach(t=>{
