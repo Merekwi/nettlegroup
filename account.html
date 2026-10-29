@@ -63,31 +63,38 @@
    paymentMethods.forEach(x=>{const el=item(x.title,x.instructions+(x.payment_details?"\nРеквизиты: "+x.payment_details:""));$("paymentInfo").appendChild(el)});
  }
  async function loadTickets(){
-   const data=await api("/api/tickets");$("ticketsList").replaceChildren();$("adminTickets").replaceChildren();
+   const data=await api("/api/tickets");$("ticketsList").replaceChildren();
    const tickets=data.tickets||[];
-   if(!tickets.length){$("ticketsList").textContent="Заказов пока нет."}
+   if(!tickets.length)$("ticketsList").textContent="Заказов пока нет.";
    tickets.forEach(t=>{
      const desc="Заказ: "+t.order_code+"\nУслуга: "+(t.service_title||"—")+"\nСумма: "+(t.amount_label||"—")+"\nОплата: "+(t.payment_method||"—")+(t.payment_reference?"\nКомментарий к платежу: "+t.payment_reference:"")+(t.admin_comment?"\nОтвет администратора: "+t.admin_comment:"");
      const el=item(t.order_code,desc,t.status);
      if(t.status==="awaiting_payment"){
        const btn=document.createElement("button");btn.className="account-button";btn.textContent="Я оплатил";
-       btn.addEventListener("click",async()=>{const ref=prompt("Укажите комментарий к переводу или последние цифры операции (если есть):","");if(ref===null)return;try{await api("/api/ticket-paid",{method:"POST",body:JSON.stringify({ticketId:t.id,paymentReference:ref})});await loadTickets()}catch(e){alert("Не удалось отправить: "+e.message)}});
+       btn.addEventListener("click",async()=>{const ref=prompt("Укажите комментарий к переводу или последние цифры операции (если есть):","");if(ref===null)return;try{await api("/api/ticket-paid",{method:"POST",body:JSON.stringify({ticketId:t.id,paymentReference:ref})});await loadTickets();if(currentUser&&currentUser.isAdmin)await loadAdminTickets()}catch(e){alert("Не удалось отправить: "+e.message)}});
        const actions=document.createElement("div");actions.className="account-actions";actions.appendChild(btn);el.appendChild(actions);
      }
      $("ticketsList").appendChild(el);
-     if(currentUser&&currentUser.isAdmin&&t.status==="paid_submitted"){
-       const admin=item((t.display_name||t.telegram_username||t.telegram_id||"Пользователь")+" · "+t.order_code,desc,t.status);
-       const actions=document.createElement("div");actions.className="account-actions";
-       const approve=document.createElement("button");approve.className="account-button";approve.textContent="Одобрить";
-       approve.addEventListener("click",async()=>{if(!confirm("Подтвердить оплату и выдать доступ?"))return;try{await api("/api/admin/ticket-decision",{method:"POST",body:JSON.stringify({ticketId:t.id,decision:"approved",comment:"Оплата подтверждена"})});await loadTickets()}catch(e){alert(e.message)}});
-       const reject=document.createElement("button");reject.className="account-button danger";reject.textContent="Отклонить";
-       reject.addEventListener("click",async()=>{const comment=prompt("Причина отказа (обязательно):");if(!comment||!comment.trim())return;try{await api("/api/admin/ticket-decision",{method:"POST",body:JSON.stringify({ticketId:t.id,decision:"rejected",comment})});await loadTickets()}catch(e){alert(e.message)}});
-       actions.append(approve,reject);admin.appendChild(actions);$("adminTickets").appendChild(admin);
-     }
    });
-   if(currentUser&&currentUser.isAdmin&&!tickets.some(t=>t.status==="paid_submitted"))$("adminTickets").textContent="Нет заявок, ожидающих проверки.";
+   if(currentUser&&currentUser.isAdmin) await loadAdminTickets();
  }
- async async function refresh(){
+ async function loadAdminTickets(){
+   const wrap=$("adminTickets");wrap.replaceChildren();
+   const data=await api("/api/admin/tickets");
+   const pending=(data.tickets||[]).filter(t=>t.status==="paid_submitted");
+   if(!pending.length){wrap.textContent="Нет заявок, ожидающих проверки.";return}
+   pending.forEach(t=>{
+     const desc="Заказ: "+t.order_code+"\nПользователь: "+(t.display_name||t.telegram_username||t.telegram_id||"—")+"\nУслуга: "+(t.service_title||"—")+"\nСумма: "+(t.amount_label||"—")+"\nОплата: "+(t.payment_method||"—")+(t.payment_reference?"\nКомментарий к платежу: "+t.payment_reference:"");
+     const el=item((t.display_name||t.telegram_username||t.telegram_id||"Пользователь")+" · "+t.order_code,desc,t.status);
+     const actions=document.createElement("div");actions.className="account-actions";
+     const approve=document.createElement("button");approve.className="account-button";approve.textContent="Одобрить";
+     approve.addEventListener("click",async()=>{if(!confirm("Подтвердить оплату и выдать доступ?"))return;try{await api("/api/admin/ticket-decision",{method:"POST",body:JSON.stringify({ticketId:t.id,decision:"approved",comment:"Оплата подтверждена"})});await loadTickets()}catch(e){alert(e.message)}});
+     const reject=document.createElement("button");reject.className="account-button danger";reject.textContent="Отклонить";
+     reject.addEventListener("click",async()=>{const comment=prompt("Причина отказа (обязательно):");if(!comment||!comment.trim())return;try{await api("/api/admin/ticket-decision",{method:"POST",body:JSON.stringify({ticketId:t.id,decision:"rejected",comment})});await loadTickets()}catch(e){alert(e.message)}});
+     actions.append(approve,reject);el.appendChild(actions);wrap.appendChild(el);
+   });
+ }
+ async function refresh(){
    const data=await api("/api/session");
    if(!data.authenticated){currentUser=null;$("loginPanel").classList.remove("account-hidden");$("dashboard").classList.add("account-hidden");return}
    currentUser=data.user;$("loginPanel").classList.add("account-hidden");$("dashboard").classList.remove("account-hidden");
