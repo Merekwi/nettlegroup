@@ -25,10 +25,10 @@ Never commit real credentials, paste the bot token into chat, or put secrets in 
 - `POST /api/auth/telegram`: validates Telegram Login Widget HMAC and rejects data older than 10 minutes; issues a signed HttpOnly/Secure cookie scoped to `.nettlegroup.space`.
 - `POST /api/auth/logout`, `GET /api/session`.
 - `GET /api/services`, `GET /api/payment-methods`.
-- `GET/POST /api/tickets`, `POST /api/tickets/:id/paid`.
-- `POST /api/admin/tickets/:id/decision`: admin-only; rejection requires a comment; approval creates a service grant in the same transaction.
-- `POST/PATCH /api/admin/services[/id]`.
-- `POST/PATCH /api/admin/payment-methods[/id]`.
+- `GET/POST /api/tickets`, `POST /api/ticket-paid` with `ticketId` in the JSON body.
+- `POST /api/admin/ticket-decision` with `ticketId` in the JSON body: admin-only; rejection requires a comment; approval creates a service grant in the same transaction.
+- `POST /api/admin/services`, `POST /api/admin/service-update`.
+- `POST /api/admin/payment-methods`, `POST /api/admin/payment-method-update`.
 - `GET/POST /api/admin/grants`.
 
 ## Notes
