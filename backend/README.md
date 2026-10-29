@@ -33,4 +33,4 @@
 
 ## Deployment status
 
-The schema is live and verified. The API implementation is committed in `backend/api-handler.js` with explicit Vercel routes under `api/`; it is **not deployed yet**. The frontend account page is `account.html`. Durable rate limiting and live deployment verification remain outstanding. Neon Auth's built-in social sign-in does not provide Telegram login, so do not substitute Google/GitHub login for the requested Telegram flow. A server runtime with secret environment variables is required before the portal can perform authenticated writes.
+The schema is live and verified. The API implementation is committed in `backend/api-handler.js` with explicit Neon Functions routes under `api/`; it is **not deployed yet**. The frontend account page is `account.html`. Durable rate limiting and live deployment verification remain outstanding. Neon Auth's built-in social sign-in does not provide Telegram login, so do not substitute Google/GitHub login for the requested Telegram flow. A server runtime with secret environment variables is required before the portal can perform authenticated writes.
