@@ -2,7 +2,7 @@ const crypto = require("node:crypto");
 const { Pool } = require("pg");
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL && !/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? { rejectUnauthorized: false } : undefined,
+  ssl: process.env.DATABASE_URL && !/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? { rejectUnauthorized: true } : undefined,
   max: 5, idleTimeoutMillis: 10000, connectionTimeoutMillis: 5000
 });
 const COOKIE = "nettle_session", TTL = 604800;
@@ -79,8 +79,8 @@ async function userFor(req) {
   return r.rows[0] || null;
 }
 function txt(v,n) { return typeof v === "string" ? v.trim().slice(0,n) : ""; }
-async function main(req,res) {
-  const path = new URL(req.url,"https://localhost").pathname.replace(/\/+$/,"") || "/";
+async function main(req,res,forcedPath) {
+  const path = forcedPath || (new URL(req.url,"https://localhost").pathname.replace(/\/+$/,"") || "/");
   setCors(req,res);
   if (req.method === "OPTIONS") {
     if (!req.headers.origin || req.headers.origin !== process.env.SITE_ORIGIN) return out(res,403,{error:"origin_check_failed"});
