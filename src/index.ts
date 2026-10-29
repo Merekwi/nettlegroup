@@ -94,7 +94,7 @@ app.get("/api/services", async (c) => {
   return c.json({services:r.rows});
 });
 app.get("/api/payment-methods", async (c) => {
-  const r=await pool.query("SELECT id,slug,title,instructions,payment_details FROM public.payment_methods WHERE is_active=true ORDER BY sort_order,id");
+  const r=await pool.query("SELECT id,title,instructions,payment_details FROM public.payment_methods WHERE is_active=true ORDER BY sort_order,id");
   return c.json({paymentMethods:r.rows});
 });
 app.get("/api/tickets", async (c) => {
@@ -107,7 +107,7 @@ app.post("/api/tickets", async (c) => {
   const d=await c.req.json<any>(); const serviceId=Number(d.serviceId), methodId=Number(d.paymentMethodId);
   if(!Number.isSafeInteger(serviceId)||!Number.isSafeInteger(methodId)) return c.json({error:"service_and_payment_method_required"},400);
   const code="NTL-"+randomBytes(5).toString("hex").toUpperCase();
-  const r=await pool.query("INSERT INTO public.payment_tickets(user_id,service_id,payment_method_id,order_code,status,amount_label) SELECT $1,s.id,p.id,$2,'awaiting_payment',s.price_label FROM public.service_catalog s CROSS JOIN public.payment_methods p WHERE s.id=$3 AND s.is_active=true AND p.id=$4 AND p.is_active=true RETURNING id,order_code,status,amount_label,service_id,payment_method_id,created_at",[u.id,code,serviceId,methodId]);
+  const r=await pool.query("INSERT INTO public.payment_tickets(user_id,service_id,payment_method_id,order_code,status,amount_label,user_comment) SELECT $1,s.id,p.id,$2,'awaiting_payment',s.price_label,$5 FROM public.service_catalog s CROSS JOIN public.payment_methods p WHERE s.id=$3 AND s.is_active=true AND p.id=$4 AND p.is_active=true RETURNING id,order_code,status,amount_label,service_id,payment_method_id,created_at",[u.id,code,serviceId,methodId,String(d.comment||'').slice(0,1000)]);
   if(!r.rowCount) return c.json({error:"service_or_payment_method_unavailable"},400);
   return c.json({ticket:r.rows[0]},201);
 });
@@ -121,7 +121,7 @@ app.post("/api/ticket-paid", async (c) => {
 });
 app.get("/api/admin/tickets", async (c) => {
   const u=await currentUser(c); if(!u) return c.json({error:"authentication_required"},401); if(!u.is_admin) return c.json({error:"admin_required"},403);
-  const r=await pool.query("SELECT t.*,u.telegram_id,u.display_name,s.title AS service_title,p.title AS payment_method_title FROM public.payment_tickets t JOIN public.user_profiles u ON u.id=t.user_id LEFT JOIN public.service_catalog s ON s.id=t.service_id LEFT JOIN public.payment_methods p ON p.id=t.payment_method_id ORDER BY t.created_at DESC LIMIT 200");
+  const r=await pool.query("SELECT t.*,u.telegram_id,u.telegram_username,u.display_name,s.title AS service_title,p.title AS payment_method FROM public.payment_tickets t JOIN public.user_profiles u ON u.id=t.user_id LEFT JOIN public.service_catalog s ON s.id=t.service_id LEFT JOIN public.payment_methods p ON p.id=t.payment_method_id ORDER BY t.created_at DESC LIMIT 200");
   return c.json({tickets:r.rows});
 });
 app.post("/api/admin/ticket-decision", async (c) => {
@@ -186,7 +186,7 @@ app.post("/api/admin/payment-methods", async (c) => {
   const u=await currentUser(c); if(!u) return c.json({error:"authentication_required"},401); if(!u.is_admin) return c.json({error:"admin_required"},403);
   const d=await c.req.json<any>();
   if(!String(d.title||"").trim()) return c.json({error:"title_required"},400);
-  const r=await pool.query("INSERT INTO public.payment_methods(slug,title,instructions,payment_details,is_active,sort_order) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",[String(d.slug||"payment-"+Date.now()).slice(0,100),String(d.title).slice(0,160),String(d.instructions||"").slice(0,3000),String(d.paymentDetails||"").slice(0,1000),d.isActive!==false,Number.isInteger(d.sortOrder)?d.sortOrder:100]);
+  const r=await pool.query("INSERT INTO public.payment_methods(title,instructions,payment_details,is_active,sort_order) VALUES($1,$2,$3,$4,$5) RETURNING *",[String(d.title).slice(0,160),String(d.instructions||"").slice(0,3000),String(d.paymentDetails||"").slice(0,1000),d.isActive!==false,Number.isInteger(d.sortOrder)?d.sortOrder:100]);
   return c.json({paymentMethod:r.rows[0]},201);
 });
 app.post("/api/admin/payment-method-update", async (c) => {
@@ -198,7 +198,7 @@ app.post("/api/admin/payment-method-update", async (c) => {
 });
 app.get("/api/admin/settings", async (c) => {
   const u=await currentUser(c); if(!u) return c.json({error:"authentication_required"},401); if(!u.is_admin) return c.json({error:"admin_required"},403);
-  const r=await pool.query("SELECT key,value,updated_at FROM public.site_settings ORDER BY key"); return c.json({settings:r.rows});
+  const r=await pool.query("SELECT setting_key,setting_value,updated_at FROM public.site_settings ORDER BY setting_key"); return c.json({settings:r.rows});
 });
 
 export default app;
