@@ -1,5 +1,4 @@
-import { createRequire } from "node:module";
-const require=createRequire(import.meta.url), handler=require("./api-handler.cjs");
+import handler from "./api-handler.cjs";
 export default { async fetch(request) {
  const url=new URL(request.url), headers=Object.fromEntries(request.headers.entries()); let body;
  if(!["GET","HEAD"].includes(request.method)){const raw=await request.text();if(raw){try{body=JSON.parse(raw)}catch{return new Response(JSON.stringify({error:"bad_json"}),{status:400,headers:{"content-type":"application/json"}})}}}
