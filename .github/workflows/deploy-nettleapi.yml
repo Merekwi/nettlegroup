@@ -6,6 +6,7 @@ on:
     paths:
       - "neon.ts"
       - "neon-function/**"
+      - "package.json"
       - ".github/workflows/deploy-nettleapi.yml"
   workflow_dispatch:
 
@@ -50,6 +51,9 @@ jobs:
             echo "::error::SESSION_SECRET must be at least 32 characters."
             exit 1
           fi
+
+      - name: Install project dependencies
+        run: npm install --no-audit --no-fund
 
       - name: Create temporary deployment environment
         shell: bash
