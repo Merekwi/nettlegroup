@@ -171,7 +171,15 @@ async function main(req,res,forcedPath) {
     const d=await readBody(req), slug=txt(d.slug,80).toLowerCase(), title=txt(d.title,160);
     const days=d.durationDays==null||d.durationDays===""?null:Number(d.durationDays);
     if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)||!title||(days!==null&&(!Number.isInteger(days)||days<1||days>36500))) return out(res,400,{error:"invalid_service_fields"});
-    const r=await pool.query("INSERT INTO public.service_catalog(slug,title,description,price_label,duration_days,is_active,sort_order) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",[slug,title,txt(d.description,2000),txt(d.priceLabel,100),days,d.isActive!==false,Number.isInteger(d.sortOrder)?d.sortOrder:0]);
+    let r;
+    try {
+      r=await pool.query("INSERT INTO public.service_catalog(slug,title,description,price_label,duration_days,is_active,sort_order) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",[slug,title,txt(d.description,2000),txt(d.priceLabel,100),days,d.isActive!==false,Number.isInteger(d.sortOrder)?d.sortOrder:0]);
+    } catch (e) {
+      if (e && e.code === "23505" && e.constraint === "service_catalog_slug_key") {
+        return out(res,409,{error:"service_slug_already_exists"});
+      }
+      throw e;
+    }
     await pool.query("INSERT INTO public.audit_logs(actor_user_id,action,entity_type,entity_id,details) VALUES($1,'service_created','service_catalog',$2,$3::jsonb)",[u.id,String(r.rows[0].id),JSON.stringify({slug,title})]);
     return out(res,201,{service:r.rows[0]});
   }
