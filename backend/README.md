@@ -15,7 +15,7 @@
 4. Every admin endpoint must check the verified Telegram identity against `user_profiles.is_admin` on the server.
 5. Payment submissions are claims, not proof of payment. Only an administrator can approve or reject a ticket until a trusted payment-provider webhook is implemented.
 6. Generate order codes on the server using cryptographically secure randomness; enforce uniqueness in PostgreSQL.
-7. Use parameterized SQL. Validate every request body and rate-limit public endpoints.
+7. Use parameterized SQL and validate request bodies. Durable rate limiting is still a pre-production task and is not implemented in this starter.
 8. Do not enable anonymous write access to these tables through a public Data API.
 
 ## Intended API contract
@@ -33,4 +33,4 @@
 
 ## Deployment status
 
-The schema is live and verified. The API implementation is committed in `backend/api-handler.js` with explicit Vercel routes under `api/`; it is **not deployed yet**. Neon Auth's built-in social sign-in does not provide Telegram login, so do not substitute Google/GitHub login for the requested Telegram flow. A server runtime with secret environment variables is required before the portal can perform authenticated writes.
+The schema is live and verified. The API implementation is committed in `backend/api-handler.js` with explicit Vercel routes under `api/`; it is **not deployed yet**. The frontend account page is `account.html`. Durable rate limiting and live deployment verification remain outstanding. Neon Auth's built-in social sign-in does not provide Telegram login, so do not substitute Google/GitHub login for the requested Telegram flow. A server runtime with secret environment variables is required before the portal can perform authenticated writes.
