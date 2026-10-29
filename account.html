@@ -36,7 +36,7 @@
  const $=id=>document.getElementById(id);
  let currentUser=null, services=[], paymentMethods=[];
  function status(id,message,error){const el=$(id);el.textContent=message||"";el.classList.toggle("error",!!error);}
- const API_BASE="https://br-little-union-b9iipjfz-nettleapi.compute.c-7.eu-central-1.aws.neon.tech";
+ const API_BASE="https://api.nettlegroup.space";
  async function api(path,opts={}){
    const response=await fetch(API_BASE+path,{credentials:"include",...opts,headers:{"Content-Type":"application/json",...(opts.headers||{})}});
    let data={};try{data=await response.json()}catch(_){}
