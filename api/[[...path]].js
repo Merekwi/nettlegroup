@@ -12,9 +12,20 @@ function out(res, status, data) {
   res.setHeader("Cache-Control", "no-store");
   res.end(JSON.stringify(data));
 }
+function setCors(req, res) {
+  const origin = req.headers.origin;
+  const allowed = process.env.SITE_ORIGIN;
+  if (origin && allowed && origin === allowed) {
+    res.setHeader("Access-Control-Allow-Origin", allowed);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
+    res.setHeader("Vary", "Origin");
+  }
+}
 function sameOrigin(req) {
-  try { return !!req.headers.origin && new URL(req.headers.origin).host === req.headers.host && new URL(req.headers.origin).protocol === "https:"; }
-  catch (_) { return false; }
+  return !!process.env.SITE_ORIGIN && req.headers.origin === process.env.SITE_ORIGIN &&
+    req.headers.origin.startsWith("https://");
 }
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -68,20 +79,27 @@ async function userFor(req) {
 function txt(v,n) { return typeof v === "string" ? v.trim().slice(0,n) : ""; }
 async function main(req,res) {
   const path = new URL(req.url,"https://localhost").pathname.replace(/\/+$/,"") || "/";
-  if (req.method === "OPTIONS") { res.statusCode=204; res.setHeader("Allow","GET, POST, PATCH, OPTIONS"); return res.end(); }
+  setCors(req,res);
+  if (req.method === "OPTIONS") {
+    if (!req.headers.origin || req.headers.origin !== process.env.SITE_ORIGIN) return out(res,403,{error:"origin_check_failed"});
+    res.statusCode=204; res.setHeader("Allow","GET, POST, PATCH, OPTIONS"); return res.end();
+  }
   if (path === "/api/auth/telegram" && req.method === "POST") {
+    if (!sameOrigin(req)) return out(res,403,{error:"origin_check_failed"});
     const data = await readBody(req), ident = verifyTelegram(data);
     if (!ident) return out(res,401,{error:"telegram_signature_invalid_or_expired"});
     const adminId=String(process.env.INITIAL_ADMIN_TELEGRAM_ID||"");
     if (!/^\d{1,20}$/.test(adminId)) throw new Error("INITIAL_ADMIN_TELEGRAM_ID is not configured");
     const r=await pool.query("INSERT INTO public.user_profiles(telegram_id,telegram_username,display_name,is_admin) VALUES($1,$2,$3,$1=$4::bigint) ON CONFLICT(telegram_id) DO UPDATE SET telegram_username=EXCLUDED.telegram_username,display_name=EXCLUDED.display_name,is_admin=public.user_profiles.is_admin OR EXCLUDED.is_admin,updated_at=now() RETURNING id,telegram_id::text,telegram_username,display_name,is_admin",[ident.id,ident.username,ident.name,adminId]);
     const u=r.rows[0], token=issue({tg:u.telegram_id,exp:Math.floor(Date.now()/1000)+TTL});
-    res.setHeader("Set-Cookie",COOKIE+"="+encodeURIComponent(token)+"; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age="+TTL);
+    const cookieDomain = process.env.COOKIE_DOMAIN ? "; Domain=" + process.env.COOKIE_DOMAIN : "";
+    res.setHeader("Set-Cookie",COOKIE+"="+encodeURIComponent(token)+"; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age="+TTL+cookieDomain);
     return out(res,200,{user:{id:u.id,telegramId:u.telegram_id,username:u.telegram_username,displayName:u.display_name,isAdmin:u.is_admin}});
   }
   if (path === "/api/auth/logout" && req.method === "POST") {
     if (!sameOrigin(req)) return out(res,403,{error:"origin_check_failed"});
-    res.setHeader("Set-Cookie",COOKIE+"=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0");
+    const cookieDomain = process.env.COOKIE_DOMAIN ? "; Domain=" + process.env.COOKIE_DOMAIN : "";
+    res.setHeader("Set-Cookie",COOKIE+"=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"+cookieDomain);
     return out(res,200,{ok:true});
   }
   if (path === "/api/session" && req.method === "GET") {
