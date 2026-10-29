@@ -1,0 +1,8 @@
+{
+  "name": "nettle-group-api",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}
