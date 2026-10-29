@@ -72,6 +72,55 @@ jobs:
       - name: Deploy declared function and bundle dependencies
         run: neon deploy --project-id dry-shape-51006688 --branch br-little-union-b9iipjfz --env .env.ci
 
+      - name: Smoke test API CORS and session endpoint
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const base = "https://br-little-union-b9iipjfz-nettleapi.compute.c-7.eu-central-1.aws.neon.tech";
+          const origin = process.env.SITE_ORIGIN;
+          const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          let lastError;
+          for (let attempt = 1; attempt <= 10; attempt++) {
+            try {
+              const preflight = await fetch(base + "/api/session", {
+                method: "OPTIONS",
+                headers: {
+                  Origin: origin,
+                  "Access-Control-Request-Method": "GET",
+                  "Access-Control-Request-Headers": "content-type",
+                },
+              });
+              if (preflight.status !== 204) {
+                throw new Error("OPTIONS expected 204, received " + preflight.status);
+              }
+              if (preflight.headers.get("access-control-allow-origin") !== origin) {
+                throw new Error("OPTIONS response has an incorrect Access-Control-Allow-Origin");
+              }
+              if (preflight.headers.get("access-control-allow-credentials") !== "true") {
+                throw new Error("OPTIONS response is missing Access-Control-Allow-Credentials: true");
+              }
+
+              const response = await fetch(base + "/api/session", {
+                headers: { Origin: origin, "Content-Type": "application/json" },
+              });
+              const data = await response.json();
+              if (!response.ok || typeof data.authenticated !== "boolean") {
+                throw new Error("GET /api/session failed with HTTP " + response.status);
+              }
+              if (response.headers.get("access-control-allow-origin") !== origin) {
+                throw new Error("GET response has an incorrect Access-Control-Allow-Origin");
+              }
+              console.log("API smoke test passed: OPTIONS 204 and GET /api/session " + response.status);
+              process.exit(0);
+            } catch (error) {
+              lastError = error;
+              if (attempt < 10) await wait(2000);
+            }
+          }
+          console.error("API smoke test failed:", lastError?.message || lastError);
+          process.exit(1);
+          NODE
+
       - name: Remove temporary environment
         if: always()
         run: rm -f .env.ci
