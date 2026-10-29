@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#171b16">
+<title>Личный кабинет — Nettle Group</title><meta name="description" content="Личный кабинет и управление услугами Nettle Group.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet"><link rel="stylesheet" href="style.css">
+<style>
+.account-main{max-width:1120px;margin:0 auto;padding:64px 28px 100px;min-height:65vh}.account-kicker{font-size:11px;letter-spacing:.16em;color:#b66a3b;font-weight:800}.account-main h1{font:800 clamp(38px,6vw,68px)/1.05 Manrope,sans-serif;letter-spacing:-.055em;margin:14px 0}.account-main h1 em{color:#bd6936;font-style:normal}.account-intro{color:#777969;max-width:600px;line-height:1.75}.account-panel{margin-top:28px;padding:clamp(20px,4vw,34px);border:1px solid rgba(123,93,59,.2);border-radius:24px;background:rgba(255,249,236,.8);box-shadow:0 16px 48px rgba(63,51,32,.06)}.account-panel h2{font:800 24px Manrope,sans-serif;margin:0 0 18px}.account-panel h3{font:700 16px Manrope,sans-serif;margin:0 0 12px}.account-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}.account-field{display:flex;flex-direction:column;gap:7px;margin:0 0 14px;font-size:12px;color:#696b5d;font-weight:700}.account-field input,.account-field select,.account-field textarea{width:100%;box-sizing:border-box;border:1px solid #d9d1bd;border-radius:12px;background:#fffdf6;color:#282b23;padding:12px 13px;font:500 14px 'DM Sans',sans-serif;outline:none}.account-field textarea{min-height:82px;resize:vertical}.account-field input:focus,.account-field select:focus,.account-field textarea:focus{border-color:#bd6936;box-shadow:0 0 0 3px #bd693620}.account-button{border:0;border-radius:999px;padding:12px 18px;background:#29382b;color:#fff9ec;font:700 13px 'DM Sans',sans-serif;cursor:pointer;transition:transform .2s,background .2s}.account-button:hover{transform:translateY(-2px);background:#40523e}.account-button.secondary{background:#eadcc5;color:#553b2a}.account-button.danger{background:#8c3d2b}.account-status{margin-top:12px;color:#747365;font-size:13px;line-height:1.6}.account-status.error{color:#9a3d2b}.account-user{display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap}.account-muted{color:#777969;font-size:13px}.account-list{display:grid;gap:12px}.account-item{border:1px solid #e0d7c4;border-radius:16px;padding:16px;background:#fffdf7}.account-item strong{display:block;margin-bottom:5px}.account-item p{margin:6px 0;color:#747365;font-size:13px;line-height:1.6;overflow-wrap:anywhere}.account-pill{display:inline-block;border-radius:99px;padding:5px 9px;background:#eee5d4;color:#5d513d;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase}.account-pill.approved{background:#dfe9d7;color:#355237}.account-pill.rejected{background:#f1ded5;color:#8a3927}.account-pill.paid_submitted{background:#f6e7c7;color:#7d5525}.account-admin{border-color:#cbb99a}.account-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.account-sep{height:1px;background:#e4dbc9;margin:24px 0}.account-hidden{display:none!important}.account-footer{margin-top:55px;display:flex;justify-content:space-between;gap:15px;flex-wrap:wrap;color:#858372;font-size:10px;letter-spacing:.1em}.telegram-slot{margin-top:18px;min-height:42px}@media(max-width:650px){.account-main{padding:42px 18px 65px}.account-panel{border-radius:18px}.account-user{align-items:flex-start}}
+</style></head>
+<body class="home">
+<header class="nav"><a class="brand" href="index.html" aria-label="Nettle Group — главная"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M8 31C5 17 12 7 27 5c1 14-5 23-19 26Z"/><path d="M10 32C19 21 24 15 28 7"/></svg></span><span class="brand-type">NETTLE<span>GROUP</span></span></a><nav><a href="index.html#projects">Проекты</a><a href="index.html#about">О группе</a><a href="index.html#contacts">Контакты</a></nav><a class="nav-button" href="index.html">На главную <span>↗</span></a></header>
+<main class="account-main">
+<div class="account-kicker">NETTLE GROUP · ЛИЧНОЕ ПРОСТРАНСТВО</div><h1>Ваши проекты.<br><em>Ваш доступ.</em></h1><p class="account-intro">Войдите через Telegram, чтобы создавать заявки, видеть статус оплаты и управлять доступами, если у вас есть права администратора.</p>
+<section id="loginPanel" class="account-panel"><h2>Войти через Telegram</h2><p class="account-muted">Авторизация проверяется сервером. Мы не просим пароль от Telegram.</p><div id="telegramWidget" class="telegram-slot"></div><div id="loginStatus" class="account-status">Для входа требуется развернутый API и настройка домена бота в BotFather.</div></section>
+<section id="dashboard" class="account-hidden">
+<div class="account-panel account-user"><div><div class="account-kicker">ВЫ ВОШЛИ</div><h2 id="welcomeName" style="margin:8px 0 5px">Личный кабинет</h2><div id="welcomeMeta" class="account-muted"></div></div><button id="logoutBtn" class="account-button secondary">Выйти</button></div>
+<div class="account-grid">
+<section class="account-panel"><h2>Оформить заявку</h2><form id="orderForm"><label class="account-field">Услуга<select id="serviceSelect" required></select></label><label class="account-field">Способ оплаты<select id="paymentSelect" required></select></label><label class="account-field">Комментарий (необязательно)<textarea id="orderComment" maxlength="1000" placeholder="Дополнительная информация"></textarea></label><button class="account-button" type="submit">Создать заказ</button></form><div id="orderStatus" class="account-status"></div></section>
+<section class="account-panel"><h2>Способы оплаты</h2><div id="paymentInfo" class="account-list"><p class="account-muted">Загрузка…</p></div></section>
+</div>
+<section class="account-panel"><h2>Мои заказы</h2><p class="account-muted">После перевода нажмите «Я оплатил». Доступ появится только после проверки администратором.</p><div id="ticketsList" class="account-list"></div></section>
+<section id="adminPanel" class="account-panel account-admin account-hidden"><div class="account-kicker">УПРАВЛЕНИЕ</div><h2 style="margin-top:8px">Панель администратора</h2><p class="account-muted">Решения по платежам, каталог услуг, реквизиты и ручная выдача доступа.</p>
+<h3>Заявки на оплату</h3><div id="adminTickets" class="account-list"></div>
+<div class="account-sep"></div><div class="account-grid">
+<div><h3>Добавить услугу</h3><form id="serviceForm"><label class="account-field">Код (латиницей)<input name="slug" pattern="[a-z0-9][a-z0-9-]*" required maxlength="80" placeholder="premium-access"></label><label class="account-field">Название<input name="title" required maxlength="160"></label><label class="account-field">Описание<textarea name="description" maxlength="2000"></textarea></label><label class="account-field">Цена (отображаемый текст)<input name="priceLabel" maxlength="100" placeholder="500 ₽"></label><label class="account-field">Длительность, дней (пусто — без срока)<input name="durationDays" type="number" min="1" max="36500"></label><button class="account-button" type="submit">Добавить услугу</button></form><div id="serviceStatus" class="account-status"></div></div>
+<div><h3>Добавить способ оплаты</h3><form id="paymentForm"><label class="account-field">Название<input name="title" required maxlength="160" placeholder="Перевод по номеру"></label><label class="account-field">Инструкция<textarea name="instructions" maxlength="3000" required placeholder="Как перевести оплату"></textarea></label><label class="account-field">Реквизиты<input name="paymentDetails" maxlength="1000" required placeholder="Номер / ссылка / получатель"></label><button class="account-button" type="submit">Добавить способ оплаты</button></form><div id="paymentStatus" class="account-status"></div></div>
+</div>
+<div class="account-sep"></div><div><h3>Выдать доступ вручную</h3><form id="grantForm" class="account-grid"><label class="account-field">Telegram ID пользователя<input name="telegramId" required inputmode="numeric" pattern="[0-9]+" maxlength="20"></label><label class="account-field">ID услуги (необязательно)<input name="serviceId" type="number" min="1"></label><label class="account-field">Длительность, дней (пусто — бессрочно)<input name="durationDays" type="number" min="1" max="36500"></label><label class="account-field">Комментарий<input name="note" maxlength="1000"></label><div><button class="account-button" type="submit">Выдать доступ</button><div id="grantStatus" class="account-status"></div></div></form></div>
+</section>
+</section>
+<div class="account-footer"><span>NETTLE GROUP · INDEPENDENT BY NATURE</span><a href="index.html">ВЕРНУТЬСЯ НА САЙТ ↑</a></div>
+</main>
+<script>
+(function(){
+ const $=id=>document.getElementById(id);
+ let currentUser=null, services=[], paymentMethods=[];
+ function status(id,message,error){const el=$(id);el.textContent=message||"";el.classList.toggle("error",!!error);}
+ async function api(path,opts={}){
+   const response=await fetch(path,{credentials:"same-origin",...opts,headers:{"Content-Type":"application/json",...(opts.headers||{})}});
+   let data={};try{data=await response.json()}catch(_){}
+   if(!response.ok)throw new Error(data.error||("HTTP "+response.status));
+   return data;
+ }
+ function option(value,label){const o=document.createElement("option");o.value=value;o.textContent=label;return o}
+ function pill(value){const s=document.createElement("span");s.className="account-pill "+value;s.textContent=({awaiting_payment:"Ожидает оплаты",paid_submitted:"На проверке",approved:"Одобрено",rejected:"Отклонено",cancelled:"Отменено"}[value]||value);return s}
+ function item(title,description,statusValue){
+   const el=document.createElement("article");el.className="account-item";
+   const strong=document.createElement("strong");strong.textContent=title;el.appendChild(strong);
+   if(statusValue)el.appendChild(pill(statusValue));
+   if(description){const p=document.createElement("p");p.textContent=description;el.appendChild(p)}
+   return el;
+ }
+ async function loadCatalog(){
+   const [s,p]=await Promise.all([api("/api/services"),api("/api/payment-methods")]);
+   services=s.services||[];paymentMethods=p.paymentMethods||[];
+   $("serviceSelect").replaceChildren();$("paymentSelect").replaceChildren();
+   services.forEach(x=>$("serviceSelect").appendChild(option(x.id,x.title+" — "+(x.price_label||"цена уточняется"))));
+   paymentMethods.forEach(x=>$("paymentSelect").appendChild(option(x.id,x.title)));
+   $("paymentInfo").replaceChildren();
+   if(!paymentMethods.length){$("paymentInfo").textContent="Способы оплаты пока не настроены."}
+   paymentMethods.forEach(x=>{const el=item(x.title,x.instructions+(x.payment_details?"\nРеквизиты: "+x.payment_details:""));$("paymentInfo").appendChild(el)});
+ }
+ async function loadTickets(){
+   const data=await api("/api/tickets");$("ticketsList").replaceChildren();$("adminTickets").replaceChildren();
+   const tickets=data.tickets||[];
+   if(!tickets.length){$("ticketsList").textContent="Заказов пока нет."}
+   tickets.forEach(t=>{
+     const desc="Заказ: "+t.order_code+"\nУслуга: "+(t.service_title||"—")+"\nСумма: "+(t.amount_label||"—")+"\nОплата: "+(t.payment_method||"—")+(t.payment_reference?"\nКомментарий к платежу: "+t.payment_reference:"")+(t.admin_comment?"\nОтвет администратора: "+t.admin_comment:"");
+     const el=item(t.order_code,desc,t.status);
+     if(t.status==="awaiting_payment"){
+       const btn=document.createElement("button");btn.className="account-button";btn.textContent="Я оплатил";
+       btn.addEventListener("click",async()=>{const ref=prompt("Укажите комментарий к переводу или последние цифры операции (если есть):","");if(ref===null)return;try{await api("/api/tickets/"+t.id+"/paid",{method:"POST",body:JSON.stringify({paymentReference:ref})});await loadTickets()}catch(e){alert("Не удалось отправить: "+e.message)}});
+       const actions=document.createElement("div");actions.className="account-actions";actions.appendChild(btn);el.appendChild(actions);
+     }
+     $("ticketsList").appendChild(el);
+     if(currentUser&&currentUser.isAdmin&&t.status==="paid_submitted"){
+       const admin=item((t.display_name||t.telegram_username||t.telegram_id||"Пользователь")+" · "+t.order_code,desc,t.status);
+       const actions=document.createElement("div");actions.className="account-actions";
+       const approve=document.createElement("button");approve.className="account-button";approve.textContent="Одобрить";
+       approve.addEventListener("click",async()=>{if(!confirm("Подтвердить оплату и выдать доступ?"))return;try{await api("/api/admin/tickets/"+t.id+"/decision",{method:"POST",body:JSON.stringify({decision:"approved",comment:"Оплата подтверждена"})});await loadTickets()}catch(e){alert(e.message)}});
+       const reject=document.createElement("button");reject.className="account-button danger";reject.textContent="Отклонить";
+       reject.addEventListener("click",async()=>{const comment=prompt("Причина отказа (обязательно):");if(!comment||!comment.trim())return;try{await api("/api/admin/tickets/"+t.id+"/decision",{method:"POST",body:JSON.stringify({decision:"rejected",comment})});await loadTickets()}catch(e){alert(e.message)}});
+       actions.append(approve,reject);admin.appendChild(actions);$("adminTickets").appendChild(admin);
+     }
+   });
+   if(currentUser&&currentUser.isAdmin&&!tickets.some(t=>t.status==="paid_submitted"))$("adminTickets").textContent="Нет заявок, ожидающих проверки.";
+ }
+ async function refresh(){
+   const data=await api("/api/session");
+   if(!data.authenticated){currentUser=null;$("loginPanel").classList.remove("account-hidden");$("dashboard").classList.add("account-hidden");return}
+   currentUser=data.user;$("loginPanel").classList.add("account-hidden");$("dashboard").classList.remove("account-hidden");
+   $("welcomeName").textContent=currentUser.displayName||"Личный кабинет";$("welcomeMeta").textContent="@"+(currentUser.username||"telegram")+" · ID "+currentUser.telegramId+(currentUser.isAdmin?" · Администратор":"");
+   $("adminPanel").classList.toggle("account-hidden",!currentUser.isAdmin);
+   await loadCatalog();await loadTickets();
+ }
+ window.onTelegramAuth=async function(user){
+   status("loginStatus","Проверяем подпись Telegram…");
+   try{await api("/api/auth/telegram",{method:"POST",body:JSON.stringify(user)});await refresh()}
+   catch(e){status("loginStatus","Не удалось войти. Проверьте домен Telegram-виджета и развертывание API. "+e.message,true)}
+ };
+ $("logoutBtn").addEventListener("click",async()=>{try{await api("/api/auth/logout",{method:"POST",body:"{}"});await refresh()}catch(e){alert(e.message)}});
+ $("orderForm").addEventListener("submit",async e=>{e.preventDefault();try{const r=await api("/api/tickets",{method:"POST",body:JSON.stringify({serviceId:$("serviceSelect").value,paymentMethodId:$("paymentSelect").value,comment:$("orderComment").value})});status("orderStatus","Заказ "+r.ticket.order_code+" создан. Следуйте инструкции по оплате.");$("orderComment").value="";await loadTickets()}catch(e){status("orderStatus","Не удалось создать заказ: "+e.message,true)}});
+ $("serviceForm").addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{await api("/api/admin/services",{method:"POST",body:JSON.stringify({slug:f.get("slug"),title:f.get("title"),description:f.get("description"),priceLabel:f.get("priceLabel"),durationDays:f.get("durationDays")||null})});e.currentTarget.reset();status("serviceStatus","Услуга добавлена.");await loadCatalog()}catch(err){status("serviceStatus","Ошибка: "+err.message,true)}});
+ $("paymentForm").addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{await api("/api/admin/payment-methods",{method:"POST",body:JSON.stringify({title:f.get("title"),instructions:f.get("instructions"),paymentDetails:f.get("paymentDetails")})});e.currentTarget.reset();status("paymentStatus","Способ оплаты добавлен.");await loadCatalog()}catch(err){status("paymentStatus","Ошибка: "+err.message,true)}});
+ $("grantForm").addEventListener("submit",async e=>{e.preventDefault();status("grantStatus","Ручная выдача доступа доступна после активации соответствующего API-обработчика.",true)});
+ async function widget(){
+   const script=document.createElement("script");script.src="https://telegram.org/js/telegram-widget.js?22";script.async=true;
+   script.setAttribute("data-telegram-login","Verify_NettleBOT");script.setAttribute("data-size","large");script.setAttribute("data-userpic","false");script.setAttribute("data-request-access","write");script.setAttribute("data-onauth","onTelegramAuth(user)");
+   $("telegramWidget").appendChild(script);
+ }
+ refresh().then(()=>{if(!currentUser)widget()}).catch(()=>{status("loginStatus","API пока не отвечает. Сначала разверните backend и настройте серверные секреты.")});
+})();
+</script>
+</body></html>
