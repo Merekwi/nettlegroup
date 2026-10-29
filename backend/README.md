@@ -25,12 +25,12 @@
 - `GET /api/payment-methods`: list active payment instructions without exposing internal metadata.
 - `GET /api/tickets`: list the authenticated user's own tickets; admin can filter all tickets.
 - `POST /api/tickets`: create an order ticket for an active service and payment method.
-- `POST /api/tickets/:id/paid`: mark a ticket as payment-submitted; does not approve it.
-- `POST /api/admin/tickets/:id/decision`: admin-only approve/reject with a required reason for rejection.
-- `POST /api/admin/services` and `PATCH /api/admin/services/:id`: admin-only service management.
-- `POST /api/admin/payment-methods` and `PATCH /api/admin/payment-methods/:id`: admin-only payment method management.
+- `POST /api/ticket-paid` with `ticketId`: mark a ticket as payment-submitted; does not approve it.
+- `POST /api/admin/ticket-decision` with `ticketId`: admin-only approve/reject with a required reason for rejection.
+- `POST /api/admin/services` and `POST /api/admin/service-update`: admin-only service management.
+- `POST /api/admin/payment-methods` and `POST /api/admin/payment-method-update`: admin-only payment method management.
 - `POST /api/admin/grants`: admin-only manual access grant/revoke with audit log.
 
 ## Deployment status
 
-The schema is live and verified. The HTTP API is **not deployed yet**. Neon Auth's built-in social sign-in does not provide Telegram login, so do not substitute Google/GitHub login for the requested Telegram flow. A server runtime with secret environment variables is required before the portal can perform authenticated writes.
+The schema is live and verified. The API implementation is committed in `backend/api-handler.js` with explicit Vercel routes under `api/`; it is **not deployed yet**. Neon Auth's built-in social sign-in does not provide Telegram login, so do not substitute Google/GitHub login for the requested Telegram flow. A server runtime with secret environment variables is required before the portal can perform authenticated writes.
