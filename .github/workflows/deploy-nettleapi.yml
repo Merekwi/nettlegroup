@@ -47,4 +47,5 @@ jobs:
           fi
 
       - name: Deploy existing Neon function
-        run: npx --yes neon@latest functions deploy nettleapi --project-id dry-shape-51006688 --branch-id br-little-union-b9iipjfz
+        working-directory: neon-function
+        run: npx --yes neon@latest functions deploy nettleapi --src index.mjs --project-id dry-shape-51006688 --branch br-little-union-b9iipjfz
