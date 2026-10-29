@@ -71,7 +71,7 @@
      const el=item(t.order_code,desc,t.status);
      if(t.status==="awaiting_payment"){
        const btn=document.createElement("button");btn.className="account-button";btn.textContent="Я оплатил";
-       btn.addEventListener("click",async()=>{const ref=prompt("Укажите комментарий к переводу или последние цифры операции (если есть):","");if(ref===null)return;try{await api("/api/tickets/"+t.id+"/paid",{method:"POST",body:JSON.stringify({paymentReference:ref})});await loadTickets()}catch(e){alert("Не удалось отправить: "+e.message)}});
+       btn.addEventListener("click",async()=>{const ref=prompt("Укажите комментарий к переводу или последние цифры операции (если есть):","");if(ref===null)return;try{await api("/api/ticket-paid",{method:"POST",body:JSON.stringify({ticketId:t.id,paymentReference:ref})});await loadTickets()}catch(e){alert("Не удалось отправить: "+e.message)}});
        const actions=document.createElement("div");actions.className="account-actions";actions.appendChild(btn);el.appendChild(actions);
      }
      $("ticketsList").appendChild(el);
@@ -79,9 +79,9 @@
        const admin=item((t.display_name||t.telegram_username||t.telegram_id||"Пользователь")+" · "+t.order_code,desc,t.status);
        const actions=document.createElement("div");actions.className="account-actions";
        const approve=document.createElement("button");approve.className="account-button";approve.textContent="Одобрить";
-       approve.addEventListener("click",async()=>{if(!confirm("Подтвердить оплату и выдать доступ?"))return;try{await api("/api/admin/tickets/"+t.id+"/decision",{method:"POST",body:JSON.stringify({decision:"approved",comment:"Оплата подтверждена"})});await loadTickets()}catch(e){alert(e.message)}});
+       approve.addEventListener("click",async()=>{if(!confirm("Подтвердить оплату и выдать доступ?"))return;try{await api("/api/admin/ticket-decision",{method:"POST",body:JSON.stringify({ticketId:t.id,decision:"approved",comment:"Оплата подтверждена"})});await loadTickets()}catch(e){alert(e.message)}});
        const reject=document.createElement("button");reject.className="account-button danger";reject.textContent="Отклонить";
-       reject.addEventListener("click",async()=>{const comment=prompt("Причина отказа (обязательно):");if(!comment||!comment.trim())return;try{await api("/api/admin/tickets/"+t.id+"/decision",{method:"POST",body:JSON.stringify({decision:"rejected",comment})});await loadTickets()}catch(e){alert(e.message)}});
+       reject.addEventListener("click",async()=>{const comment=prompt("Причина отказа (обязательно):");if(!comment||!comment.trim())return;try{await api("/api/admin/tickets/"+t.id+"/decision",{method:"POST",body:JSON.stringify({ticketId:t.id,decision:"rejected",comment})});await loadTickets()}catch(e){alert(e.message)}});
        actions.append(approve,reject);admin.appendChild(actions);$("adminTickets").appendChild(admin);
      }
    });
