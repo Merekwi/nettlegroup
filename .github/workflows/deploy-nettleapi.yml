@@ -66,8 +66,16 @@ jobs:
             printf 'SITE_ORIGIN=%s\n' "$SITE_ORIGIN"
           } > .env.ci
 
-      - name: Install Neon CLI
-        run: npm install --global neon@latest
+      - name: Install official Neon CLI binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "https://github.com/neondatabase/neon-pkgs/releases/download/neon%408.14.0/neon-linux-x64" \
+            --output /tmp/neon
+          chmod 0755 /tmp/neon
+          sudo install -m 0755 /tmp/neon /usr/local/bin/neon
+          neon --version
 
       - name: Deploy declared function and bundle dependencies
         run: neon deploy --project-id dry-shape-51006688 --branch br-little-union-b9iipjfz --env .env.ci
