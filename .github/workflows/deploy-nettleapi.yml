@@ -55,17 +55,6 @@ jobs:
       - name: Install project dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Create temporary deployment environment
-        shell: bash
-        run: |
-          umask 077
-          {
-            printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN"
-            printf 'INITIAL_ADMIN_TELEGRAM_ID=%s\n' "$INITIAL_ADMIN_TELEGRAM_ID"
-            printf 'SESSION_SECRET=%s\n' "$SESSION_SECRET"
-            printf 'SITE_ORIGIN=%s\n' "$SITE_ORIGIN"
-          } > .env.ci
-
       - name: Install official Neon CLI binary
         shell: bash
         run: |
@@ -77,8 +66,18 @@ jobs:
           sudo install -m 0755 /tmp/neon /usr/local/bin/neon
           neon --version
 
-      - name: Deploy declared function and bundle dependencies
-        run: neon deploy --project-id dry-shape-51006688 --branch br-little-union-b9iipjfz --env .env.ci
+      - name: Deploy the API Function directly
+        shell: bash
+        run: |
+          set -euo pipefail
+          neon functions deploy nettleapi \
+            --src neon-function \
+            --project-id dry-shape-51006688 \
+            --branch br-little-union-b9iipjfz \
+            --env "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN" \
+            --env "INITIAL_ADMIN_TELEGRAM_ID=$INITIAL_ADMIN_TELEGRAM_ID" \
+            --env "SESSION_SECRET=$SESSION_SECRET" \
+            --env "SITE_ORIGIN=$SITE_ORIGIN"
 
       - name: Smoke test API CORS and session endpoint
         shell: bash
@@ -157,7 +156,3 @@ jobs:
           console.error("API smoke test failed:", lastError?.message || lastError);
           process.exit(1);
           NODE
-
-      - name: Remove temporary environment
-        if: always()
-        run: rm -f .env.ci
