@@ -888,68 +888,82 @@ async function main(req,res,forcedPath) {
 
     if (path === "/api/presidential/game/new" && req.method === "POST") {
       if (!gameUser) return out(res,401,{error:"authentication_required"});
-      const input = await readBody(req);
-      const countryId = Number(input.countryId);
-      const president = txt(input.presidentName,100);
-      const age = Number(input.presidentAge);
-      const course = txt(input.politicalCourse,40);
-      const difficulty = txt(input.difficulty,20);
-      const startYear = Number(input.startYear);
-      const portraitId = txt(input.portraitId,4);
-      const courseOptions = {
-        social_democracy:{label:"Социальная демократия",effects:{publicServices:7,education:4,healthcare:5,gdpGrowth:-0.1,approval:2,treasury:-2}},
-        market_liberal:{label:"Рыночный либерализм",effects:{gdpGrowth:0.7,taxRate:-2,unemployment:-0.3,approval:1,publicServices:-2,stability:-1}},
-        conservative:{label:"Консервативный курс",effects:{stability:6,militaryPower:5,taxRate:1,approval:1}},
-        green_transition:{label:"Зелёная модернизация",effects:{infrastructure:4,healthcare:2,gdpGrowth:-0.2,corruption:-1}},
-        industrial:{label:"Промышленное развитие",effects:{gdpGrowth:0.6,infrastructure:5,militaryPower:2,treasury:-3}}
-      };
-      const difficultyOptions = {
+      const input=await readBody(req),difficulty=txt(input.difficulty,20);
+      const difficultyOptions={
         easy:{label:"Облегчённая",treasury:1.25,approval:8,stability:7,debt:-5},
-        normal:{label:"Стандартная",treasury:1,approval:0,stability:0,debt:0},
+        normal:{label:"Обычная",treasury:1,approval:0,stability:0,debt:0},
         hard:{label:"Сложная",treasury:0.72,approval:-9,stability:-12,debt:12}
       };
-      if (!Number.isSafeInteger(countryId) || president.length < 3 || !Number.isInteger(age) || age < 25 || age > 90 ||
-          !courseOptions[course] || !difficultyOptions[difficulty] || !Number.isInteger(startYear) || startYear < 2026 || startYear > 2030 ||
-          !/^p(0[1-9]|1[0-6])$/.test(portraitId)) {
-        return out(res,400,{error:"invalid_campaign_setup"});
-      }
-      const countryResult = await presidentialPool.query("SELECT * FROM countries WHERE id=$1 AND iso2 IS NOT NULL",[countryId]);
-      if (!countryResult.rowCount) return out(res,404,{error:"country_not_found"});
-      const country = countryResult.rows[0];
-      const baseline = country.baseline_state || {};
-      const base = (key,fallback) => Number.isFinite(Number(baseline[key])) ? Number(baseline[key]) : fallback;
-      const yearDate = String(startYear) + "-01-01";
-      const state = {
+      if(!difficultyOptions[difficulty])return out(res,400,{error:"invalid_campaign_difficulty"});
+      const countryResult=await presidentialPool.query("SELECT * FROM countries WHERE iso2 IS NOT NULL ORDER BY random() LIMIT 1");
+      if(!countryResult.rowCount)return out(res,503,{error:"country_catalog_empty"});
+      const country=countryResult.rows[0],baseline=country.baseline_state||{};
+      const base=(key,fallback)=>Number.isFinite(Number(baseline[key]))?Number(baseline[key]):fallback;
+      const startYear=new Date().getUTCFullYear(),yearDate=String(startYear)+"-01-01";
+      const candidatePools={
+        AR:["Lucía Fernández","Mateo González","Valentina Rodríguez","Santiago López","Camila Martínez"],
+        AU:["Olivia Williams","Jack Thompson","Charlotte Wilson","Noah Harris","Amelia Martin"],
+        BR:["Mariana Oliveira","Gabriel Souza","Beatriz Costa","Lucas Pereira","Isabela Santos"],
+        CA:["Émilie Tremblay","Liam Anderson","Ava Campbell","Noah Martin","Chloé Gagnon"],
+        CL:["Martina Rojas","Benjamín Muñoz","Isidora Silva","Vicente Torres","Florencia Soto"],
+        EG:["Mariam Hassan","Omar Ahmed","Nour Ibrahim","Youssef Ali","Salma Mahmoud"],
+        FR:["Camille Moreau","Gabriel Laurent","Léa Bernard","Hugo Petit","Inès Dubois"],
+        DE:["Lena Schneider","Felix Weber","Mia Fischer","Leon Wagner","Clara Becker"],
+        IN:["Aarav Sharma","Ananya Patel","Vivaan Singh","Aadhya Gupta","Ishaan Kumar"],
+        ID:["Putri Wijaya","Budi Santoso","Siti Lestari","Rizky Pratama","Dewi Anggraini"],
+        JP:["Haruto Sato","Yui Suzuki","Ren Tanaka","Hina Watanabe","Sota Ito"],
+        KE:["Amina Otieno","Brian Mwangi","Wanjiku Njoroge","Daniel Kiptoo","Nia Kamau"],
+        MX:["Sofía Hernández","Mateo García","Valentina López","Santiago Martínez","Camila Pérez"],
+        NL:["Sophie de Vries","Daan Jansen","Emma van Dijk","Lucas Bakker","Lotte Visser"],
+        NO:["Ingrid Hansen","Magnus Johansen","Nora Olsen","Emil Larsen","Sigrid Berg"],
+        PL:["Anna Zielińska","Jakub Nowak","Zofia Wiśniewska","Antoni Kowalski","Maja Wójcik"],
+        ZA:["Naledi Nkosi","Thabo Dlamini","Amahle Mokoena","Lethabo Ndlovu","Sipho Khumalo"],
+        TH:["Nattaya Chaiyaporn","Thanakorn Srisai","Kanya Phrom","Preecha Boonmee","Suda Rattanakul"],
+        TR:["Elif Yılmaz","Emir Demir","Zeynep Kaya","Kerem Şahin","Aylin Çelik"],
+        UA:["Олена Ковальчук","Андрій Мельник","Марія Шевченко","Максим Бондаренко","Софія Ткаченко"]
+      };
+      const names=candidatePools[country.iso2]||["Alex Morgan","Maya Patel","Daniel Novak","Sofia Martin","Noah Chen"];
+      const president=names[crypto.randomInt(names.length)],age=crypto.randomInt(34,70);
+      const portraitId="p"+String(crypto.randomInt(1,17)).padStart(2,"0");
+      const backgrounds=[
+        {label:"бывший руководитель региональной администрации",groups:{rural:2,publicSector:2,workers:1},trust:1},
+        {label:"экономист и специалист по государственным финансам",groups:{business:2,publicSector:1,workers:-1},trust:2},
+        {label:"предприниматель и руководитель частных компаний",groups:{business:4,conservative:1,publicSector:-2},trust:0},
+        {label:"общественный деятель и организатор социальных инициатив",groups:{workers:2,youth:3,publicSector:1,business:-1},trust:2},
+        {label:"опытный дипломат и бывший представитель страны за рубежом",groups:{business:1,youth:1,conservative:2},trust:3},
+        {label:"политик из независимого регионального движения",groups:{rural:3,youth:2,publicSector:-1,conservative:1},trust:1}
+      ];
+      const background=backgrounds[crypto.randomInt(backgrounds.length)],difficultyRule=difficultyOptions[difficulty];
+      const state={
         gdp:base("gdp",350),gdpGrowth:base("gdpGrowth",2.1),inflation:base("inflation",3.2),
-        unemployment:base("unemployment",5.4),approval:base("approval",54),stability:base("stability",65),
+        unemployment:base("unemployment",5.4),approval:base("approval",45),stability:base("stability",60),
         budgetBalance:base("budgetBalance",0),treasury:base("treasury",30),population:base("population",25),
         militaryPower:base("militaryPower",48),publicServices:base("publicServices",55),corruption:base("corruption",34),
         debt:base("debt",55),taxRate:base("taxRate",22),education:base("education",55),
         healthcare:base("healthcare",58),infrastructure:base("infrastructure",52),actionPoints:2,
-        politicalCourse:course,difficulty:difficulty,presidentPortrait:portraitId,startYear:startYear,
-        phase:"election_campaign",dictatorship:false,electionsWon:0,nextElectionDate:null,
-        democracyIndex:55,
-        election:{
-          kind:/парламент|монарх/i.test(String(country.government_type||""))?"parliamentary":"presidential",
-          type:/парламент|монарх/i.test(String(country.government_type||""))?"Парламентские выборы":"Президентские выборы",
-          partyName:txt(input.partyName,80)||"Партия национального развития",
-          candidateSupport:Number(clampNumber(37+(course==="social_democracy"?2:course==="conservative"?1:0)+(difficulty==="easy"?4:difficulty==="hard"?-5:0),22,52).toFixed(1)),
-          oppositionSupport:45,actionsRemaining:4,actionsTaken:[],commissionControl:0,
-          scheduledDate:yearDate,firstElection:true,round:1
-        }
+        difficulty:difficulty,presidentPortrait:portraitId,startYear:startYear,phase:"election_campaign",
+        dictatorship:false,electionsWon:0,nextElectionDate:null,democracyIndex:base("democracyIndex",55)
       };
-      const effectBounds = key => key==="gdpGrowth"?[-20,30]:key==="inflation"?[0,200]:key==="unemployment"?[0,60]:key==="taxRate"?[0,70]:[0,100];
-      for (const [key,value] of Object.entries(courseOptions[course].effects)) {
-        const bounds = effectBounds(key);
-        state[key] = Number(clampNumber(Number(state[key] || 0) + value,bounds[0],bounds[1]).toFixed(2));
-      }
-      const difficultyRule = difficultyOptions[difficulty];
-      state.treasury = Number((state.treasury * difficultyRule.treasury).toFixed(2));
-      state.approval = Number(clampNumber(state.approval + difficultyRule.approval,0,100).toFixed(2));
-      state.stability = Number(clampNumber(state.stability + difficultyRule.stability,0,100).toFixed(2));
-      state.debt = Number(clampNumber(state.debt + difficultyRule.debt,0,500).toFixed(2));
-      const campaignTitle = txt(input.campaignTitle,90) || country.name_local || country.name_en;
-      const bio = "Кандидат на общенациональных выборах. Политический курс: " + courseOptions[course].label + ". Сложность: " + difficultyRule.label + ".";
+      state.treasury=Number((state.treasury*difficultyRule.treasury).toFixed(2));
+      state.approval=Number(clampNumber(state.approval+difficultyRule.approval,0,100).toFixed(2));
+      state.stability=Number(clampNumber(state.stability+difficultyRule.stability,0,100).toFixed(2));
+      state.debt=Number(clampNumber(state.debt+difficultyRule.debt,0,500).toFixed(2));
+      const voterGroups=createVoterGroups(state.approval,0);
+      for(const [key,value] of Object.entries(background.groups))voterGroups[key]=Number(clampNumber(voterGroups[key]+value,8,82).toFixed(1));
+      const policyCredibility=crypto.randomInt(50,66);
+      const institutionalTrust=Number(clampNumber(state.democracyIndex+background.trust,5,95).toFixed(1));
+      const campaignTitle=country.name_local||country.name_en;
+      const bio="Кандидат в президенты, "+age+" лет; "+background.label+". Имя, внешность и государство определены случайным образом. Сложность симуляции: "+difficultyRule.label.toLowerCase()+".";
+      state.election={
+        kind:/парламент|монарх/i.test(String(country.government_type||""))?"parliamentary":"presidential",
+        type:/парламент|монарх/i.test(String(country.government_type||""))?"Парламентские выборы":"Президентские выборы",
+        partyName:txt(input.partyName,80)||"Партия национального развития",
+        candidateSupport:calculateCampaignSupport(voterGroups,policyCredibility,institutionalTrust,0),
+        oppositionSupport:0,voterGroups,policyCredibility,institutionalTrust,
+        fiscalImpactPct:0,policyEffects:{},agenda:buildCampaignAgenda(),issueIndex:0,
+        currentIssue:CAMPAIGN_ISSUES[0].id,decisions:[],scheduledDate:yearDate,firstElection:true,round:1
+      };
+      state.election.oppositionSupport=Number((100-state.election.candidateSupport).toFixed(1));
       const cabinetPools = {
         AR:["Lucía Fernández","Mateo González","Valentina Rodríguez","Santiago López","Camila Martínez"],
         AU:["Olivia Williams","Jack Thompson","Charlotte Wilson","Noah Harris","Amelia Martin"],
@@ -1034,13 +1048,10 @@ async function main(req,res,forcedPath) {
             [save.id,unit[0],unit[1],unit[2],unit[3]]
           );
         }
-        const startArticle = "В " + (country.name_local || country.name_en) + " состоялась церемония вступления в должность президента " + president + ". Новая администрация начинает работу с курсом «" + courseOptions[course].label + "». Стартовые условия: " + difficultyRule.label.toLowerCase() + ".";
-        await client.query(
-          "INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'inauguration',$3,$4,2,'{}'::jsonb)",
-          [save.id,yearDate,"Президент " + president + " вступил в должность",startArticle]
-        );
+        const startArticle="В "+(country.name_local||country.name_en)+" начинается общенациональная избирательная кампания. Кандидат "+president+", "+age+" лет, выдвинут партией «"+state.election.partyName+"». Биография кандидата: "+background.label+". Стартовые условия: "+difficultyRule.label.toLowerCase()+".";
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'election_campaign',$3,$4,2,'{}'::jsonb)",[save.id,yearDate,"Партия выдвинула кандидата в президенты",startArticle]);
         await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'campaign_created',$3::jsonb)",[
-          gameUser.id,save.id,JSON.stringify({countryId:country.id,iso2:country.iso2,course,difficulty,startYear,portraitId})
+          gameUser.id,save.id,JSON.stringify({countryId:country.id,iso2:country.iso2,presidentName:president,presidentAge:age,difficulty,startYear,portraitId,randomized:true})
         ]);
         await client.query("COMMIT");
         return out(res,201,{game:{...save,iso2:country.iso2,name_en:country.name_en,name_local:country.name_local,flag_emoji:country.flag_emoji,government_type:country.government_type,region:country.region}});
