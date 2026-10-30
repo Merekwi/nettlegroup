@@ -120,57 +120,50 @@ function assessPolicy(order, state) {
   };
 }
 async function draftOfficialDocument(order, game, effects) {
-  const fallbackTitle = ({
-    health:"О мерах по развитию системы здравоохранения",
-    education:"О развитии национальной системы образования",
-    tax_cut:"О корректировке налоговой политики",
+  const titles = {
+    health:"О мерах по модернизации системы здравоохранения",
+    education:"О реализации национальной программы развития образования",
+    tax_cut:"О внесении изменений в налоговую политику",
     tax_increase:"О внесении изменений в налоговую систему",
-    defense:"О развитии обороноспособности государства",
-    infrastructure:"О реализации программы развития инфраструктуры",
-    anti_corruption:"О мерах по противодействию коррупции",
-    social:"О мерах социальной поддержки населения",
-    energy_environment:"О развитии энергетики и охране окружающей среды",
-    foreign_policy:"О мерах по развитию внешнеэкономического сотрудничества",
-    general:"О мерах государственной политики"
-  })[effects.category] || "О мерах государственной политики";
-  const fallback = {
-    title:fallbackTitle,
-    summary:"Проект подготовлен по инициативе президента. Финансовые и социально-экономические последствия будут пересмотрены по итогам исполнения.",
-    body:"В целях реализации государственной политики и обеспечения устойчивого развития постановляю:\n\n1. Утвердить инициативу: «"+order+"».\n\n2. Правительству и профильным министерствам в течение 30 дней подготовить план реализации, источники финансирования и измеримые показатели эффективности.\n\n3. Министерству финансов обеспечить контроль бюджетных обязательств в пределах утверждённых ассигнований.\n\n4. Представить президенту доклад о ходе исполнения через 90 дней."
+    defense:"О мерах по укреплению обороноспособности государства",
+    infrastructure:"О реализации государственной программы развития инфраструктуры",
+    anti_corruption:"О мерах по обеспечению прозрачности государственного управления",
+    social:"О дополнительных мерах социальной поддержки населения",
+    energy_environment:"О развитии энергетической инфраструктуры",
+    foreign_policy:"О мерах по развитию международного сотрудничества",
+    general:"О мерах по реализации государственной политики"
   };
-  const apiKey=process.env.OPENROUTER_API_KEY;
-  const model=process.env.OPENROUTER_MODEL;
-  if (!apiKey || !model) return fallback;
-  try {
+  const fallback = {
+    title:titles[effects.category]||titles.general,
+    summary:"Руководствуясь Конституцией и законами государства, в целях обеспечения устойчивого развития, надлежащего исполнения государственных обязательств и защиты общественных интересов, постановляю:",
+    body:"1. Утвердить государственную программу по следующему направлению: «"+order+"».\n\n2. Определить ответственным за координацию исполнения профильное министерство. Министерству обеспечить подготовку календарного плана мероприятий, перечня ответственных исполнителей и измеримых показателей результата.\n\n3. Министерству финансов обеспечить первоначальное финансирование в пределах утверждённых бюджетных ассигнований в размере "+effects.budgetCost+" млрд долларов США и последующее ежемесячное финансирование в размере "+effects.monthlyCost+" млрд долларов США.\n\n4. Установить срок реализации программы — "+effects.durationMonths+" месяцев со дня вступления настоящего Указа в силу.\n\n5. Правительству ежеквартально представлять Президенту доклад о ходе исполнения, освоении средств, достигнутых результатах и выявленных рисках.\n\n6. Контроль за исполнением настоящего Указа возложить на Руководителя Администрации Президента.\n\n7. Настоящий Указ вступает в силу со дня его официального опубликования."
+  };
+  const apiKey=process.env.OPENROUTER_API_KEY, model=process.env.OPENROUTER_MODEL;
+  if(!apiKey||!model)return fallback;
+  try{
     const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{
       method:"POST",
       headers:{"Authorization":"Bearer "+apiKey,"Content-Type":"application/json","HTTP-Referer":"https://merekwi.github.io/presedento-sim/","X-Title":"Presidential Simulator"},
       body:JSON.stringify({
-        model,
-        temperature:0.35,
-        max_tokens:900,
+        model,temperature:0.25,max_tokens:1200,
         messages:[
-          {role:"system",content:"Ты юридический редактор вымышленной политической стратегии. Составляй официальный проект указа на русском языке. Не выдумывай числовые экономические последствия. Возвращай только JSON с полями title, summary, body. body должен содержать преамбулу и пронумерованные пункты."},
-          {role:"user",content:JSON.stringify({country:game.name_local||game.name_en,president:game.president_name,initiative:order,returnSchema:{title:"string",summary:"string",body:"string"}})}
+          {role:"system",content:"Ты специалист по нормотворчеству и юридической технике. Составляй формальные проекты нормативных указов для вымышленного государства. Стиль строгий официальный: название начинается с «О…»; юридическая преамбула; отдельная строка «ПОСТАНОВЛЯЮ:»; пронумерованные распорядительные пункты; конкретно укажи ответственное министерство, сроки, бюджетные лимиты, порядок отчётности и дату вступления в силу. Не пиши разговорно и не выдумывай номера законов, названия реальных ведомств или суммы. Переданные финансовые значения и сроки используй точно. Возвращай только JSON с полями title, summary, body."},
+          {role:"user",content:JSON.stringify({country:game.name_local||game.name_en,president:game.president_name,initiative:order,initialFunding:effects.budgetCost,monthlyFunding:effects.monthlyCost,implementationMonths:effects.durationMonths,returnSchema:{title:"string",summary:"string",body:"string"}})}
         ]
       }),
       signal:AbortSignal.timeout(25000)
     });
-    if (!response.ok) throw new Error("OpenRouter HTTP "+response.status);
-    const payload=await response.json();
-    const content=payload.choices?.[0]?.message?.content;
-    if (!content) return fallback;
-    const clean=String(content).replace(/^\s*```(?:json)?/i,"").replace(/```\s*$/,"").trim();
+    if(!response.ok)throw new Error("OpenRouter HTTP "+response.status);
+    const payload=await response.json(),content=payload.choices&&payload.choices[0]&&payload.choices[0].message&&payload.choices[0].message.content;
+    if(!content)return fallback;
+    const clean=String(content).replace(/^\s*[\u0060]{3}(?:json)?/i,"").replace(/[\u0060]{3}\s*$/,"").trim();
     const parsed=JSON.parse(clean);
     return {
       title:typeof parsed.title==="string"&&parsed.title.trim()?parsed.title.trim().slice(0,220):fallback.title,
-      summary:typeof parsed.summary==="string"?parsed.summary.trim().slice(0,1200):fallback.summary,
+      summary:typeof parsed.summary==="string"&&parsed.summary.trim()?parsed.summary.trim().slice(0,1200):fallback.summary,
       body:typeof parsed.body==="string"&&parsed.body.trim()?parsed.body.trim().slice(0,12000):fallback.body
     };
-  } catch (error) {
-    console.error("OpenRouter decree draft failed:",error.message);
-    return fallback;
-  }
+  }catch(error){console.error("OpenRouter decree draft failed:",error.message);return fallback;}
 }
 
 async function main(req,res,forcedPath) {
