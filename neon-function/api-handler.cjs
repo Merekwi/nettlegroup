@@ -684,7 +684,8 @@ async function main(req,res,forcedPath) {
           approval:Number((state.approval-previous.approval).toFixed(2)),
           stability:Number((state.stability-previous.stability).toFixed(2)),
           treasury:Number((state.treasury-previous.treasury).toFixed(2)),
-          ministerEffects,projectEffects,treatyEffects
+          ministerEffects,projectEffects,treatyEffects,mandateEffects,
+          policyMandate:state.policyMandate?{status:state.policyMandate.status,monthsElapsed:state.policyMandate.monthsElapsed,durationMonths:state.policyMandate.durationMonths}:null
         };
         await client.query("UPDATE game_saves SET state=$1::jsonb WHERE id=$2",[JSON.stringify(state),game.id]);
         const eventHeadline=electionStarted?"До национальных выборов осталось три месяца":event.headline;
