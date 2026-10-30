@@ -33,7 +33,7 @@ jobs:
       - name: Bundle API with its dependencies
         working-directory: neon-function
         run: |
-          ./node_modules/.bin/esbuild api-handler.cjs --bundle --platform=node --format=cjs --target=node24 --outfile=api-handler.bundle.cjs
+          ./node_modules/.bin/esbuild api-handler.cjs --bundle --platform=node --format=cjs --target=node24 --minify --legal-comments=none --outfile=api-handler.bundle.cjs
           node --check api-handler.bundle.cjs
           test -s api-handler.bundle.cjs
 
