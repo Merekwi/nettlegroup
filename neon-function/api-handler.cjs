@@ -962,7 +962,7 @@ async function main(req,res,forcedPath) {
         hard:{label:"Сложная",treasury:0.72,approval:-9,stability:-12,debt:12}
       };
       if(!difficultyOptions[difficulty])return out(res,400,{error:"invalid_campaign_difficulty"});
-      const countryResult=await presidentialPool.query("SELECT * FROM countries WHERE iso2 IS NOT NULL ORDER BY random() LIMIT 1");
+      const countryResult=await presidentialPool.query("SELECT * FROM countries WHERE iso2 IS NOT NULL AND government_type ILIKE '%президент%' ORDER BY random() LIMIT 1");
       if(!countryResult.rowCount)return out(res,503,{error:"country_catalog_empty"});
       const country=countryResult.rows[0],baseline=country.baseline_state||{};
       const base=(key,fallback)=>Number.isFinite(Number(baseline[key]))?Number(baseline[key]):fallback;
@@ -1021,9 +1021,10 @@ async function main(req,res,forcedPath) {
       const institutionalTrust=Number(clampNumber(state.democracyIndex+background.trust,5,95).toFixed(1));
       const campaignTitle=country.name_local||country.name_en;
       const bio="Кандидат на выборную государственную должность, "+age+" лет; "+background.label+". Имя, внешность и государство определены случайным образом. Сложность симуляции: "+difficultyRule.label.toLowerCase()+"."
+      const semiPresidential=/полупрезидент/i.test(String(country.government_type||""));
       state.election={
-        kind:/парламент|монарх/i.test(String(country.government_type||""))?"parliamentary":"presidential",
-        type:/парламент|монарх/i.test(String(country.government_type||""))?"Парламентские выборы":"Президентские выборы",
+        kind:semiPresidential?"semi_presidential":"presidential",
+        type:semiPresidential?"Выборы президента в полупрезидентской системе":"Президентские выборы",
         partyName:txt(input.partyName,80)||"Партия национального развития",
         candidateSupport:calculateCampaignSupport(voterGroups,policyCredibility,institutionalTrust,0),
         oppositionSupport:0,voterGroups,policyCredibility,institutionalTrust,
