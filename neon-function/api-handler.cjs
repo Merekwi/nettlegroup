@@ -521,13 +521,14 @@ async function main(req,res,forcedPath) {
         const infrastructure=Number(state.infrastructure||52), education=Number(state.education||55), corruption=Number(state.corruption||34);
         const ministers=await client.query("SELECT portfolio,competence,loyalty,traits FROM ministers WHERE save_id=$1 AND dismissed_at IS NULL",[game.id]);
         const projectEffects={gdpGrowth:0,inflation:0,unemployment:0,approval:0,stability:0,corruption:0,publicServices:0,education:0,healthcare:0,infrastructure:0,militaryPower:0};
+        let projectOutflow=0;
         const activeProjects=Array.isArray(state.projects)?state.projects:[];
         for(const project of activeProjects.filter(item=>item.status==="active")){
           const payment=Number(project.monthlyCost||0);
           if(Number(state.treasury||0)<payment){project.paused=true;continue;}
           project.paused=false;
           state.treasury=Number((Number(state.treasury||0)-payment).toFixed(2));
-          state.budgetBalance=Number((Number(state.budgetBalance||0)-payment).toFixed(2));
+          projectOutflow+=payment;
           project.monthsCompleted=Math.min(Number(project.durationMonths||1),Number(project.monthsCompleted||0)+1);
           for(const [key,total] of Object.entries(project.effects||{})){
             if(Object.prototype.hasOwnProperty.call(projectEffects,key)) projectEffects[key]+=Number(total)/Number(project.durationMonths||1);
@@ -576,9 +577,10 @@ async function main(req,res,forcedPath) {
         const event=randomEvents[crypto.randomInt(randomEvents.length)];
         state.gdpGrowth=clampNumber(Number(state.gdpGrowth||0)+(infrastructure-50)*0.004+(education-50)*0.002-(corruption-30)*0.001+ministerEffects.gdpGrowth+projectEffects.gdpGrowth+treatyEffects.gdpGrowth+event.growth,-15,20);
         const monthlyBalance=Number((gdp*((Number(state.taxRate||22)-21.5)/100/12)).toFixed(2));
+        const netBudget=Number((monthlyBalance-projectOutflow).toFixed(2));
         state.treasury=Number(Math.max(0,Number(state.treasury||0)+monthlyBalance+event.treasury+ministerEffects.budgetBalance*0.05).toFixed(2));
-        state.budgetBalance=monthlyBalance;
-        state.debt=Number(clampNumber(Number(state.debt||0)+(monthlyBalance<0?Math.abs(monthlyBalance)/gdp*100:0),0,500).toFixed(2));
+        state.budgetBalance=netBudget;
+        state.debt=Number(clampNumber(Number(state.debt||0)+(netBudget<0?Math.abs(netBudget)/gdp*100:0),0,500).toFixed(2));
         state.gdp=Number((gdp*(1+state.gdpGrowth/1200)).toFixed(2));
         state.inflation=Number(clampNumber(Number(state.inflation||3)+event.inflation+(state.gdpGrowth>5?0.07:-0.02)+(Math.random()-0.5)*0.12+ministerEffects.inflation+projectEffects.inflation+treatyEffects.inflation,0,100).toFixed(2));
         state.unemployment=Number(clampNumber(Number(state.unemployment||5)-state.gdpGrowth*0.025+0.025+(Math.random()-0.5)*0.18+ministerEffects.unemployment+projectEffects.unemployment+treatyEffects.unemployment,0,60).toFixed(2));
@@ -1012,9 +1014,12 @@ async function main(req,res,forcedPath) {
           [country.id,country.region]
         );
         for (const n of neighbours.rows) {
+          const sameRegion=String(n.region||"")===String(country.region||"");
+          const relationScore=sameRegion?crypto.randomInt(7,19):crypto.randomInt(-6,8);
+          const relationStatus=relationScore>=55?"allied":relationScore>=20?"friendly":relationScore<=-45?"hostile":relationScore<=-20?"strained":"neutral";
           await client.query(
-            "INSERT INTO diplomatic_relations(save_id,other_country_id,other_country_name,relation_score,status,treaties) VALUES($1,$2,$3,0,'neutral','[]'::jsonb)",
-            [save.id,n.id,n.name_local || n.name_en]
+            "INSERT INTO diplomatic_relations(save_id,other_country_id,other_country_name,relation_score,status,treaties) VALUES($1,$2,$3,$4,$5,'[]'::jsonb)",
+            [save.id,n.id,n.name_local || n.name_en,relationScore,relationStatus]
           );
         }
         const population = Number(state.population || 25);
