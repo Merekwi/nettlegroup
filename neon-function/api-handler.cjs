@@ -358,11 +358,77 @@ async function main(req,res,forcedPath) {
     }
 
     if (path === "/api/presidential/game/election/commission" && req.method === "POST") {
-      return out(res,410,{error:"legacy_commission_capture_removed"});
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const client=await presidentialPool.connect();
+      try {
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
+        const game=saved.rows[0], state={...(game.state||{})}, election={...(state.election||{})};
+        if (!["election_campaign","election"].includes(state.phase)) { await client.query("ROLLBACK"); return out(res,409,{error:"no_active_election"}); }
+        const control=Number(election.commissionControl||0);
+        if (control>=70) { await client.query("ROLLBACK"); return out(res,409,{error:"commission_already_controlled"}); }
+        const cost=Number(Math.max(0.25,Number(state.gdp||350)*0.00012).toFixed(2));
+        if (Number(state.treasury||0)<cost) { await client.query("ROLLBACK"); return out(res,409,{error:"insufficient_campaign_funds",required:cost,available:state.treasury}); }
+        state.treasury=Number((Number(state.treasury)-cost).toFixed(2));
+        state.budgetBalance=Number((Number(state.budgetBalance||0)-cost).toFixed(2));
+        state.corruption=clampNumber(Number(state.corruption||30)+6,0,100);
+        state.stability=clampNumber(Number(state.stability||60)-3,0,100);
+        state.approval=clampNumber(Number(state.approval||50)-1.5,0,100);
+        election.commissionControl=Math.min(70,control+35);
+        election.commissionCaptured=true;
+        state.election=election;
+        await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",[JSON.stringify(state),game.id]);
+        const headline="Влияние на Центральную избирательную комиссию усилено";
+        const article="Администрация добилась контроля над частью руководства избирательной комиссии. Это повышает возможность административного вмешательства, но ослабляет доверие к институтам.";
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'institutional_crisis',$3,$4,3,$5::jsonb)",[game.id,game.game_date,headline,article,JSON.stringify({commissionControl:election.commissionControl,cost,corruption:6,stability:-3,approval:-1.5})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'election_commission_capture',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({control:election.commissionControl,cost})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,election,commissionControl:election.commissionControl,cost});
+      } catch(error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
     }
 
     if (path === "/api/presidential/game/election/dictatorship" && req.method === "POST") {
-      return out(res,410,{error:"legacy_one_click_dictatorship_removed"});
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const client=await presidentialPool.connect();
+      try {
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
+        const game=saved.rows[0], state={...(game.state||{})}, election={...(state.election||{})};
+        if (!["election_campaign","election"].includes(state.phase) || Number(election.commissionControl||0)<70) {
+          await client.query("ROLLBACK");
+          return out(res,409,{error:"commission_control_required"});
+        }
+        state.phase="government";
+        state.dictatorship=true;
+        state.regimeType="Авторитарная диктатура";
+        state.nextElectionDate=null;
+        state.approval=clampNumber(Number(state.approval||50)-12,0,100);
+        state.stability=clampNumber(Number(state.stability||50)-8,0,100);
+        state.corruption=clampNumber(Number(state.corruption||30)+12,0,100);
+        state.democracyIndex=clampNumber(Number(state.democracyIndex??55)-35,0,100);
+        election.lastResult="power_grab";
+        election.ended=true;
+        state.election=election;
+        await client.query("UPDATE game_saves SET state=$1::jsonb,president_bio=$2,updated_at=now() WHERE id=$3",[JSON.stringify(state),"Глава государства. Установлен авторитарный режим; очередные конкурентные выборы отменены.",game.id]);
+        const headline="Президент объявил чрезвычайную реорганизацию политической системы";
+        const article="После установления контроля над Центральной избирательной комиссией президент сосредоточил власть в исполнительной вертикали. Конкурентные национальные выборы отменены. Международная легитимность и общественное доверие резко снизились.";
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'constitutional_crisis',$3,$4,4,$5::jsonb)",[game.id,game.game_date,headline,article,JSON.stringify({dictatorship:true,approval:-12,stability:-8,corruption:12})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'dictatorship_established',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({commissionControl:election.commissionControl})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,dictatorship:true,game:{id:game.id,state}});
+      } catch(error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
     }
 
     if (path === "/api/presidential/game/election/vote" && req.method === "POST") {
