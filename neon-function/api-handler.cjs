@@ -191,6 +191,11 @@ async function main(req,res,forcedPath) {
     const expectedOrigin = loginRoute ? process.env.SITE_ORIGIN : GAME_ORIGIN;
     if (!expectedOrigin || req.headers.origin !== expectedOrigin) return out(res,403,{error:"origin_check_failed"});
 
+    if (path === "/api/presidential/health" && req.method === "GET") {
+      const dbCheck=await presidentialPool.query("SELECT count(*)::int AS country_count FROM countries");
+      return out(res,200,{ok:true,database:true,countryCount:dbCheck.rows[0].country_count});
+    }
+
     if (loginRoute && req.method === "POST") {
       const payload = await readBody(req);
       const state = txt(payload.state,128);
