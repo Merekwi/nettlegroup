@@ -275,6 +275,170 @@ async function main(req,res,forcedPath) {
       return out(res,200,{countries:countries.rows});
     }
 
+    if (path === "/api/presidential/game/election/campaign" && req.method === "POST") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const input=await readBody(req), action=txt(input.action,40);
+      const operations = {
+        rally:{support:4,cost:0.18,approval:0.25,headline:"Партия провела встречи с избирателями",article:"Кандидат посетил регионы страны и представил программу местным жителям."},
+        debate:{support:4,cost:0.08,approval:0.2,headline:"Состоялись публичные предвыборные дебаты",article:"Кандидаты ответили на вопросы журналистов и представили позиции по ключевым реформам."},
+        manifesto:{support:3,cost:0.12,approval:0.15,headline:"Опубликована предвыборная программа",article:"Партия представила программу экономических, социальных и институциональных преобразований."},
+        coalition:{support:5,cost:0.3,approval:0.2,headline:"Заключено предвыборное коалиционное соглашение",article:"Политические силы договорились о совместной платформе и поддержке кандидата."}
+      };
+      const operation=operations[action];
+      if (!operation) return out(res,400,{error:"invalid_campaign_action"});
+      const client=await presidentialPool.connect();
+      try {
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
+        const game=saved.rows[0], state={...(game.state||{})}, election={...(state.election||{})};
+        if (!["election_campaign","election"].includes(state.phase)) { await client.query("ROLLBACK"); return out(res,409,{error:"no_active_election"}); }
+        const remaining=Number(election.actionsRemaining||0);
+        if (remaining<1) { await client.query("ROLLBACK"); return out(res,409,{error:"campaign_actions_exhausted"}); }
+        const cost=Number(operation.cost.toFixed(2));
+        if (Number(state.treasury||0)<cost) { await client.query("ROLLBACK"); return out(res,409,{error:"insufficient_campaign_funds",required:cost,available:state.treasury}); }
+        state.treasury=Number((Number(state.treasury)-cost).toFixed(2));
+        state.budgetBalance=Number((Number(state.budgetBalance||0)-cost).toFixed(2));
+        election.candidateSupport=Number(clampNumber(Number(election.candidateSupport||0)+operation.support,0,78).toFixed(2));
+        election.actionsRemaining=remaining-1;
+        election.actionsTaken=[...(Array.isArray(election.actionsTaken)?election.actionsTaken:[]),action];
+        election.lastAction=action;
+        state.election=election;
+        state.approval=Number(clampNumber(Number(state.approval||50)+operation.approval,0,100).toFixed(2));
+        await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",[JSON.stringify(state),game.id]);
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'campaign',$3,$4,1,$5::jsonb)",[game.id,game.game_date,operation.headline,operation.article,JSON.stringify({action,cost,supportGain:operation.support,remaining:election.actionsRemaining})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'election_campaign_action',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({action,cost,support:election.candidateSupport,remaining:election.actionsRemaining})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,election,treasury:state.treasury,headline:operation.headline});
+      } catch(error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    if (path === "/api/presidential/game/election/commission" && req.method === "POST") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const client=await presidentialPool.connect();
+      try {
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
+        const game=saved.rows[0], state={...(game.state||{})}, election={...(state.election||{})};
+        if (!["election_campaign","election"].includes(state.phase)) { await client.query("ROLLBACK"); return out(res,409,{error:"no_active_election"}); }
+        const control=Number(election.commissionControl||0);
+        if (control>=70) { await client.query("ROLLBACK"); return out(res,409,{error:"commission_already_controlled"}); }
+        const cost=Number(Math.max(0.25,Number(state.gdp||350)*0.00012).toFixed(2));
+        if (Number(state.treasury||0)<cost) { await client.query("ROLLBACK"); return out(res,409,{error:"insufficient_campaign_funds",required:cost,available:state.treasury}); }
+        state.treasury=Number((Number(state.treasury)-cost).toFixed(2));
+        state.budgetBalance=Number((Number(state.budgetBalance||0)-cost).toFixed(2));
+        state.corruption=clampNumber(Number(state.corruption||30)+6,0,100);
+        state.stability=clampNumber(Number(state.stability||60)-3,0,100);
+        state.approval=clampNumber(Number(state.approval||50)-1.5,0,100);
+        election.commissionControl=Math.min(70,control+35);
+        election.commissionCaptured=true;
+        state.election=election;
+        await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",[JSON.stringify(state),game.id]);
+        const headline="Влияние на Центральную избирательную комиссию усилено";
+        const article="Администрация добилась контроля над частью руководства избирательной комиссии. Это повышает возможность административного вмешательства, но ослабляет доверие к институтам.";
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'institutional_crisis',$3,$4,3,$5::jsonb)",[game.id,game.game_date,headline,article,JSON.stringify({commissionControl:election.commissionControl,cost,corruption:6,stability:-3,approval:-1.5})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'election_commission_capture',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({control:election.commissionControl,cost})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,election,commissionControl:election.commissionControl,cost});
+      } catch(error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    if (path === "/api/presidential/game/election/dictatorship" && req.method === "POST") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const client=await presidentialPool.connect();
+      try {
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
+        const game=saved.rows[0], state={...(game.state||{})}, election={...(state.election||{})};
+        if (!["election_campaign","election"].includes(state.phase) || Number(election.commissionControl||0)<70) {
+          await client.query("ROLLBACK");
+          return out(res,409,{error:"commission_control_required"});
+        }
+        state.phase="government";
+        state.dictatorship=true;
+        state.regimeType="Авторитарная диктатура";
+        state.nextElectionDate=null;
+        state.approval=clampNumber(Number(state.approval||50)-12,0,100);
+        state.stability=clampNumber(Number(state.stability||50)-8,0,100);
+        state.corruption=clampNumber(Number(state.corruption||30)+12,0,100);
+        state.democracyIndex=clampNumber(Number(state.democracyIndex??55)-35,0,100);
+        election.lastResult="power_grab";
+        election.ended=true;
+        state.election=election;
+        await client.query("UPDATE game_saves SET state=$1::jsonb,president_bio=$2,updated_at=now() WHERE id=$3",[JSON.stringify(state),"Глава государства. Установлен авторитарный режим; очередные конкурентные выборы отменены.",game.id]);
+        const headline="Президент объявил чрезвычайную реорганизацию политической системы";
+        const article="После установления контроля над Центральной избирательной комиссией президент сосредоточил власть в исполнительной вертикали. Конкурентные национальные выборы отменены. Международная легитимность и общественное доверие резко снизились.";
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'constitutional_crisis',$3,$4,4,$5::jsonb)",[game.id,game.game_date,headline,article,JSON.stringify({dictatorship:true,approval:-12,stability:-8,corruption:12})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'dictatorship_established',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({commissionControl:election.commissionControl})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,dictatorship:true,game:{id:game.id,state}});
+      } catch(error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    if (path === "/api/presidential/game/election/vote" && req.method === "POST") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const client=await presidentialPool.connect();
+      try {
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
+        const game=saved.rows[0], state={...(game.state||{})}, election={...(state.election||{})};
+        if (!["election_campaign","election"].includes(state.phase)) { await client.query("ROLLBACK"); return out(res,409,{error:"no_active_election"}); }
+        if (Number(election.actionsRemaining||0)>0) { await client.query("ROLLBACK"); return out(res,409,{error:"campaign_actions_remaining",remaining:election.actionsRemaining}); }
+        const noise=crypto.randomInt(-2,4);
+        const voteShare=Number(clampNumber(Number(election.candidateSupport||35)+Number(election.commissionControl||0)*0.10+noise,5,95).toFixed(1));
+        const won=voteShare>=50;
+        const electionDate=election.scheduledDate || game.game_date;
+        if (won) {
+          state.phase="government";
+          state.electionsWon=Number(state.electionsWon||0)+1;
+          state.nextElectionDate=election.firstElection ? (Number(state.startYear||2026)+4)+"-01-01" : (() => { const d=new Date(String(electionDate).slice(0,10)+"T00:00:00Z"); d.setUTCFullYear(d.getUTCFullYear()+4); return d.toISOString().slice(0,10); })();
+          state.approval=clampNumber(Number(state.approval||50)+4,0,100);
+          election.lastResult="victory";
+          election.voteShare=voteShare;
+          election.oppositionShare=Number((100-voteShare).toFixed(1));
+          election.ended=true;
+        } else {
+          election.lastResult="defeat";
+          election.voteShare=voteShare;
+          election.oppositionShare=Number((100-voteShare).toFixed(1));
+          election.ended=true;
+        }
+        state.election=election;
+        await client.query("UPDATE game_saves SET state=$1::jsonb,status=$2,updated_at=now() WHERE id=$3",[JSON.stringify(state),won?"active":"finished",game.id]);
+        const headline=won?"Победа на национальных выборах":"Оппозиция победила на национальных выборах";
+        const article=won
+          ? "Партия "+(election.partyName||"президента")+" получила "+voteShare+"% голосов. Избирательная комиссия подтвердила победу. Президент получает мандат на следующий срок."
+          : "Кандидат получил "+voteShare+"% голосов и уступил оппонентам. Правительство передаёт полномочия победившей политической силе. Кампания завершена.";
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'election_result',$3,$4,$5,$6::jsonb)",[game.id,electionDate,headline,article,won?1:3,JSON.stringify({won,voteShare,oppositionShare:100-voteShare})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'election_result',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({won,voteShare,commissionControl:election.commissionControl||0})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,won,voteShare,oppositionShare:100-voteShare,nextElectionDate:state.nextElectionDate||null});
+      } catch(error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
     if (path === "/api/presidential/game/current" && req.method === "GET") {
       if (!gameUser) return out(res,401,{error:"authentication_required"});
       const result = await presidentialPool.query(
@@ -312,6 +476,7 @@ async function main(req,res,forcedPath) {
         const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
         if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
         const game=saved.rows[0], state={...(game.state||{})};
+        if (state.phase && state.phase!=="government") { await client.query("ROLLBACK"); return out(res,409,{error:"election_campaign_in_progress"}); }
         const points=Number.isFinite(Number(state.actionPoints))?Number(state.actionPoints):2;
         if (points<1) { await client.query("ROLLBACK"); return out(res,409,{error:"no_action_points"}); }
         const cost=Number((Math.max(1,Number(state.gdp||350))*policy.cost).toFixed(2));
@@ -347,38 +512,90 @@ async function main(req,res,forcedPath) {
         const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
         if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
         const game=saved.rows[0], state={...(game.state||{})};
+        if (state.phase && state.phase!=="government") { await client.query("ROLLBACK"); return out(res,409,{error:"election_campaign_in_progress"}); }
         const gdp=Math.max(1,Number(state.gdp||350));
-        const oldGrowth=Number(state.gdpGrowth||2);
+        const previous={gdp:Number(state.gdp||350),gdpGrowth:Number(state.gdpGrowth||2),inflation:Number(state.inflation||3),unemployment:Number(state.unemployment||5),approval:Number(state.approval||50),stability:Number(state.stability||60),treasury:Number(state.treasury||0)};
         const infrastructure=Number(state.infrastructure||52), education=Number(state.education||55), corruption=Number(state.corruption||34);
-        const growth=clampNumber(oldGrowth+(infrastructure-50)*0.002+(education-50)*0.001-(corruption-30)*0.0005,-15,20);
-        state.gdpGrowth=Number(growth.toFixed(2));
+        const ministers=await client.query("SELECT portfolio,competence,loyalty,traits FROM ministers WHERE save_id=$1 AND dismissed_at IS NULL",[game.id]);
+        const ministerEffects={gdpGrowth:0,inflation:0,unemployment:0,approval:0,stability:0,corruption:0,publicServices:0,education:0,healthcare:0,infrastructure:0,militaryPower:0};
+        for (const minister of ministers.rows) {
+          const traits=minister.traits&&typeof minister.traits==="object"?minister.traits:{};
+          const effects=traits.effects&&typeof traits.effects==="object"?traits.effects:{};
+          const competenceFactor=0.45+Number(minister.competence||50)/100;
+          const loyaltyFactor=Number(minister.loyalty||50)<25?0.45:1;
+          for (const [key,value] of Object.entries(effects)) {
+            if (Object.prototype.hasOwnProperty.call(ministerEffects,key) && Number.isFinite(Number(value))) {
+              ministerEffects[key]+=Number(value)*competenceFactor*loyaltyFactor;
+            }
+          }
+          if (Number(minister.loyalty||50)<25) {
+            ministerEffects.corruption+=0.12;
+            ministerEffects.stability-=0.10;
+          }
+        }
         const randomEvents=[
           {type:"economy",headline:"Иностранные инвесторы расширяют присутствие",article:"Несколько международных компаний объявили о новых вложениях в экономику страны. Министерство экономики ожидает дополнительные рабочие места.",approval:1.2,stability:0.2,growth:0.15,treasury:0.55,inflation:0.02},
           {type:"society",headline:"Профсоюзы требуют повышения доходов",article:"Крупные профсоюзные объединения провели переговоры с правительством. Кабинету министров предстоит найти баланс между зарплатами и инфляцией.",approval:-1.4,stability:-0.5,growth:0,treasury:-0.15,inflation:0.08},
           {type:"economy",headline:"Центральный банк сохранил ключевую ставку",article:"Регулятор решил не менять денежно-кредитную политику и продолжить наблюдение за инфляционными рисками.",approval:0.2,stability:0.4,growth:0.02,treasury:0,inflation:-0.08},
-          {type:"politics",headline:"Оппозиция потребовала парламентских слушаний",article:"Оппозиционные фракции инициировали обсуждение эффективности государственных расходов. Правительству предстоит представить отчёт.",approval:-0.8,stability:-0.4,growth:0,treasury:0,inflation:0},
+          {type:"politics",headline:"Оппозиция потребовала парламентских слушаний",article:"Крупнейшие оппозиционные фракции потребовали отчёта правительства. Кабинету предстоит публично объяснить результаты реформ.",approval:-0.8,stability:-0.4,growth:0,treasury:0,inflation:0},
           {type:"diplomacy",headline:"Партнёры предложили расширить торговлю",article:"Дипломатические каналы передали предложение о расширении экономического сотрудничества. Министерство иностранных дел готовит переговорную позицию.",approval:0.5,stability:0.3,growth:0.12,treasury:0.25,inflation:0},
           {type:"society",headline:"Правительство получило поддержку общественных организаций",article:"Общественные организации положительно оценили последние государственные программы и предложили совместные социальные проекты.",approval:1.1,stability:0.6,growth:0.02,treasury:-0.08,inflation:0},
           {type:"crisis",headline:"Погодные условия осложнили работу инфраструктуры",article:"Неблагоприятная погода привела к локальным перебоям в транспортной системе. Региональным властям поручено восстановить движение.",approval:-0.6,stability:-0.2,growth:-0.08,treasury:-0.35,inflation:0.05},
           {type:"politics",headline:"Аудит выявил нарушения в закупках",article:"Контрольные органы сообщили о нарушениях в нескольких государственных контрактах. Начата проверка, профильному министерству поручено представить предложения.",approval:corruption>40?-1.8:0.5,stability:-0.2,growth:-0.03,treasury:-0.1,inflation:0}
         ];
         const event=randomEvents[crypto.randomInt(randomEvents.length)];
-        state.gdpGrowth=clampNumber(state.gdpGrowth+event.growth,-15,20);
+        state.gdpGrowth=clampNumber(Number(state.gdpGrowth||0)+(infrastructure-50)*0.004+(education-50)*0.002-(corruption-30)*0.001+ministerEffects.gdpGrowth+event.growth,-15,20);
         const monthlyBalance=Number((gdp*((Number(state.taxRate||22)-21.5)/100/12)).toFixed(2));
-        state.treasury=Number(Math.max(0,Number(state.treasury||0)+monthlyBalance+event.treasury).toFixed(2));
+        state.treasury=Number(Math.max(0,Number(state.treasury||0)+monthlyBalance+event.treasury+ministerEffects.budgetBalance*0.05).toFixed(2));
         state.budgetBalance=monthlyBalance;
         state.debt=Number(clampNumber(Number(state.debt||0)+(monthlyBalance<0?Math.abs(monthlyBalance)/gdp*100:0),0,500).toFixed(2));
         state.gdp=Number((gdp*(1+state.gdpGrowth/1200)).toFixed(2));
-        state.inflation=Number(clampNumber(Number(state.inflation||3)+event.inflation+(state.gdpGrowth>5?0.07:-0.02)+(Math.random()-0.5)*0.08,0,100).toFixed(2));
-        state.unemployment=Number(clampNumber(Number(state.unemployment||5)-state.gdpGrowth*0.018+0.015+(Math.random()-0.5)*0.12,0,60).toFixed(2));
-        state.approval=Number(clampNumber(Number(state.approval||50)+event.approval+(Number(state.publicServices||58)-55)*0.012-(state.inflation-3)*0.035,0,100).toFixed(2));
-        state.stability=Number(clampNumber(Number(state.stability||60)+event.stability+(state.approval-50)*0.012-(corruption-35)*0.008,0,100).toFixed(2));
+        state.inflation=Number(clampNumber(Number(state.inflation||3)+event.inflation+(state.gdpGrowth>5?0.07:-0.02)+(Math.random()-0.5)*0.12+ministerEffects.inflation,0,100).toFixed(2));
+        state.unemployment=Number(clampNumber(Number(state.unemployment||5)-state.gdpGrowth*0.025+0.025+(Math.random()-0.5)*0.18+ministerEffects.unemployment,0,60).toFixed(2));
+        state.approval=Number(clampNumber(Number(state.approval||50)+event.approval+(state.gdpGrowth-2)*0.16-(state.inflation-3)*0.045-(state.unemployment-5)*0.10+(Number(state.publicServices||58)-55)*0.045+ministerEffects.approval,0,100).toFixed(2));
+        state.stability=Number(clampNumber(Number(state.stability||60)+event.stability+(state.approval-50)*0.025-(corruption-35)*0.018+ministerEffects.stability,0,100).toFixed(2));
+        for (const key of ["publicServices","education","healthcare","infrastructure","militaryPower"]) {
+          if (ministerEffects[key]) state[key]=Number(clampNumber(Number(state[key]||50)+ministerEffects[key],0,100).toFixed(2));
+        }
+        state.corruption=Number(clampNumber(Number(state.corruption||30)+ministerEffects.corruption,0,100).toFixed(2));
         state.actionPoints=2;
-        const updated=await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2 RETURNING id,game_date,turn_number,state",[JSON.stringify(state),game.id]);
-        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)",[game.id,updated.rows[0].game_date,event.type,event.headline,event.article,event.type==="crisis"?3:2,JSON.stringify({approval:event.approval,stability:event.stability,gdpGrowth:event.growth,treasury:event.treasury,monthlyBudget:monthlyBalance})]);
-        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'month_advanced',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({turn:updated.rows[0].turn_number,event:event.type,monthlyBudget:monthlyBalance})]);
+        const updated=await client.query("UPDATE game_saves SET state=$1::jsonb,turn_number=turn_number+1,game_date=game_date+interval '1 month',updated_at=now() WHERE id=$2 RETURNING id,game_date,turn_number,state",[JSON.stringify(state),game.id]);
+        const newDate=String(updated.rows[0].game_date).slice(0,10);
+        let electionStarted=false;
+        if (!state.dictatorship && state.nextElectionDate) {
+          const triggerDate=new Date(String(state.nextElectionDate).slice(0,10)+"T00:00:00Z");
+          triggerDate.setUTCMonth(triggerDate.getUTCMonth()-3);
+          if (new Date(newDate+"T00:00:00Z")>=triggerDate) {
+            const support=clampNumber(34+(Number(state.approval||50)-50)*0.32+(Number(state.stability||60)-60)*0.08+(Number(state.gdpGrowth||2)-2)*0.6-(Number(state.inflation||3)-3)*0.04-(Number(state.unemployment||5)-5)*0.12,18,55);
+            state.phase="election";
+            state.election={
+              kind:state.election&&state.election.kind||"presidential",
+              type:state.election&&state.election.type||"Национальные выборы",
+              partyName:state.election&&state.election.partyName||"Партия национального развития",
+              candidateSupport:Number(support.toFixed(1)),oppositionSupport:Number((100-support).toFixed(1)),
+              actionsRemaining:4,actionsTaken:[],commissionControl:0,
+              scheduledDate:state.nextElectionDate,firstElection:false,round:Number(state.electionsWon||1)+1
+            };
+            electionStarted=true;
+          }
+        }
+        state.lastMonthChanges={
+          gdp:Number((state.gdp-previous.gdp).toFixed(2)),
+          gdpGrowth:Number((state.gdpGrowth-previous.gdpGrowth).toFixed(2)),
+          inflation:Number((state.inflation-previous.inflation).toFixed(2)),
+          unemployment:Number((state.unemployment-previous.unemployment).toFixed(2)),
+          approval:Number((state.approval-previous.approval).toFixed(2)),
+          stability:Number((state.stability-previous.stability).toFixed(2)),
+          treasury:Number((state.treasury-previous.treasury).toFixed(2)),
+          ministerEffects
+        };
+        await client.query("UPDATE game_saves SET state=$1::jsonb WHERE id=$2",[JSON.stringify(state),game.id]);
+        const eventHeadline=electionStarted?"До национальных выборов осталось три месяца":event.headline;
+        const eventArticle=electionStarted?"Началась предвыборная кампания. Правительству предстоит вновь получить мандат избирателей.":event.article;
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)",[game.id,newDate,electionStarted?"election_notice":event.type,eventHeadline,eventArticle,electionStarted?2:(event.type==="crisis"?3:2),JSON.stringify({approval:event.approval,stability:event.stability,gdpGrowth:event.growth,treasury:event.treasury,monthlyBudget:monthlyBalance,ministerEffects,electionStarted})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'month_advanced',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({turn:updated.rows[0].turn_number,event:event.type,monthlyBudget:monthlyBalance,electionStarted,ministerEffects})]);
         await client.query("COMMIT");
-        return out(res,200,{ok:true,game:updated.rows[0],event:{type:event.type,headline:event.headline,article:event.article},monthlyBudget:monthlyBalance});
+        return out(res,200,{ok:true,game:{...updated.rows[0],state},event:{type:electionStarted?"election_notice":event.type,headline:eventHeadline,article:eventArticle},monthlyBudget:monthlyBalance,electionStarted,ministerEffects,lastMonthChanges:state.lastMonthChanges});
       } catch(error) {
         await client.query("ROLLBACK");
         throw error;
@@ -391,6 +608,24 @@ async function main(req,res,forcedPath) {
       if (!gameUser) return out(res,401,{error:"authentication_required"});
       const input=await readBody(req), action=txt(input.action,32);
       const portfolios=["Финансы","Иностранные дела","Оборона","Экономика","Здравоохранение","Образование","Внутренние дела"];
+      const archetypes={
+        technocrat:{label:"Технократ",effects:{gdpGrowth:0.08,inflation:-0.025}},
+        reformer:{label:"Реформатор",effects:{publicServices:0.13,approval:0.11,stability:-0.03}},
+        diplomat:{label:"Дипломат",effects:{stability:0.07,approval:0.06}},
+        hardliner:{label:"Силовик",effects:{stability:0.15,approval:-0.08,corruption:0.04}},
+        populist:{label:"Популист",effects:{approval:0.24,stability:-0.06,budgetBalance:-0.08}},
+        oligarch:{label:"Связи с бизнесом",effects:{gdpGrowth:0.12,corruption:0.18,approval:-0.10}},
+        incompetent:{label:"Некомпетентный",effects:{gdpGrowth:-0.10,corruption:0.14,stability:-0.06}}
+      };
+      const portfolioEffects={
+        "Финансы":{inflation:-0.04,budgetBalance:0.04},
+        "Иностранные дела":{gdpGrowth:0.03,stability:0.03},
+        "Оборона":{militaryPower:0.16,stability:0.08},
+        "Экономика":{gdpGrowth:0.11,unemployment:-0.05},
+        "Здравоохранение":{healthcare:0.18,approval:0.08},
+        "Образование":{education:0.16,gdpGrowth:0.03},
+        "Внутренние дела":{stability:0.10,corruption:-0.08}
+      };
       if (!["appoint","dismiss"].includes(action)) return out(res,400,{error:"invalid_minister_action"});
       const client=await presidentialPool.connect();
       try {
@@ -398,20 +633,35 @@ async function main(req,res,forcedPath) {
         const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
         if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
         const game=saved.rows[0], state={...(game.state||{})};
+        if (state.phase && state.phase!=="government") { await client.query("ROLLBACK"); return out(res,409,{error:"election_campaign_in_progress"}); }
         let headline,article,minister;
         if (action==="appoint") {
           const name=txt(input.name,100), portfolio=txt(input.portfolio,80), age=Number(input.age);
-          if (name.length<3||!portfolios.includes(portfolio)||!Number.isInteger(age)||age<25||age>90) {
+          const competence=Number(input.competence), loyalty=Number(input.loyalty);
+          const archetype=txt(input.archetype,32), portraitId=txt(input.portraitId,4);
+          if (name.length<3||!portfolios.includes(portfolio)||!Number.isInteger(age)||age<25||age>90||
+              !Number.isInteger(competence)||competence<20||competence>100||!Number.isInteger(loyalty)||loyalty<20||loyalty>100||
+              !archetypes[archetype]||!/^p(0[1-9]|1[0-6])$/.test(portraitId)) {
             await client.query("ROLLBACK");
             return out(res,400,{error:"invalid_minister_details"});
           }
           const occupied=await client.query("SELECT id FROM ministers WHERE save_id=$1 AND portfolio=$2 AND dismissed_at IS NULL",[game.id,portfolio]);
           if (occupied.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"portfolio_already_filled"}); }
-          const inserted=await client.query("INSERT INTO ministers(save_id,portfolio,full_name,age,competence,loyalty,approval,traits) VALUES($1,$2,$3,$4,$5,$6,$7,'[]'::jsonb) RETURNING id,portfolio,full_name,age,competence,loyalty,approval,traits",[game.id,portfolio,name,age,crypto.randomInt(42,91),crypto.randomInt(38,91),crypto.randomInt(42,81)]);
+          const effects={...portfolioEffects[portfolio],...archetypes[archetype].effects};
+          for (const key of Object.keys(effects)) {
+            if (portfolioEffects[portfolio]&&Object.prototype.hasOwnProperty.call(portfolioEffects[portfolio],key)&&archetypes[archetype].effects[key]!==undefined) {
+              effects[key]=Number((portfolioEffects[portfolio][key]+archetypes[archetype].effects[key]).toFixed(3));
+            }
+          }
+          const traits={portraitId,archetype,archetypeLabel:archetypes[archetype].label,effects};
+          const inserted=await client.query(
+            "INSERT INTO ministers(save_id,portfolio,full_name,age,competence,loyalty,approval,traits) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING id,portfolio,full_name,age,competence,loyalty,approval,traits",
+            [game.id,portfolio,name,age,competence,loyalty,crypto.randomInt(42,81),JSON.stringify(traits)]
+          );
           minister=inserted.rows[0];
-          state.stability=clampNumber(Number(state.stability||50)+0.4,0,100);
+          state.stability=clampNumber(Number(state.stability||50)+(loyalty-50)*0.012,0,100);
           headline="Президент назначил нового министра";
-          article=name+" возглавил(а) направление «"+portfolio+"». Новый руководитель приступает к работе.";
+          article=name+" возглавил(а) направление «"+portfolio+"». Специализация: "+archetypes[archetype].label+". Компетентность: "+competence+"/100, лояльность: "+loyalty+"/100.";
         } else {
           const ministerId=txt(input.ministerId,64);
           if (!/^[0-9a-f-]{36}$/i.test(ministerId)) { await client.query("ROLLBACK"); return out(res,400,{error:"invalid_minister_id"}); }
@@ -483,7 +733,9 @@ async function main(req,res,forcedPath) {
       if (order.length<10) return out(res,400,{error:"initiative_too_short"});
       const found=await presidentialPool.query("SELECT s.*,c.name_local,c.name_en FROM game_saves s LEFT JOIN countries c ON c.id=s.country_id WHERE s.owner_user_id=$1 AND s.status='active' ORDER BY s.updated_at DESC LIMIT 1",[gameUser.telegram_id]);
       if (!found.rowCount) return out(res,409,{error:"start_a_game_first"});
-      const game=found.rows[0], effects=assessPolicy(order,game.state||{}), document=await draftOfficialDocument(order,game,effects);
+      const game=found.rows[0];
+      if ((game.state||{}).phase && (game.state||{}).phase!=="government") return out(res,409,{error:"election_campaign_in_progress"});
+      const effects=assessPolicy(order,game.state||{}), document=await draftOfficialDocument(order,game,effects);
       const numberResult=await presidentialPool.query("SELECT COALESCE(MAX(decree_number),0)+1 AS next_number FROM decrees WHERE save_id=$1",[game.id]);
       const inserted=await presidentialPool.query(
         "INSERT INTO decrees(save_id,decree_number,title,summary,body,original_order,status,effects) VALUES($1,$2,$3,$4,$5,$6,'draft',$7::jsonb) RETURNING id,decree_number,title,summary,body,status,effects,created_at",
@@ -502,6 +754,7 @@ async function main(req,res,forcedPath) {
         const saved=await client.query("SELECT s.* FROM game_saves s WHERE s.owner_user_id=$1 AND s.status='active' ORDER BY s.updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
         if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
         const game=saved.rows[0];
+        if ((game.state||{}).phase && (game.state||{}).phase!=="government") { await client.query("ROLLBACK"); return out(res,409,{error:"election_campaign_in_progress"}); }
         const d=await client.query("SELECT * FROM decrees WHERE id=$1 AND save_id=$2 FOR UPDATE",[decreeId,game.id]);
         if (!d.rowCount) { await client.query("ROLLBACK"); return out(res,404,{error:"decree_not_found"}); }
         if (d.rows[0].status!=="draft") { await client.query("ROLLBACK"); return out(res,409,{error:"decree_not_draft"}); }
@@ -582,7 +835,17 @@ async function main(req,res,forcedPath) {
         militaryPower:base("militaryPower",48),publicServices:base("publicServices",55),corruption:base("corruption",34),
         debt:base("debt",55),taxRate:base("taxRate",22),education:base("education",55),
         healthcare:base("healthcare",58),infrastructure:base("infrastructure",52),actionPoints:2,
-        politicalCourse:course,difficulty:difficulty,presidentPortrait:portraitId,startYear:startYear
+        politicalCourse:course,difficulty:difficulty,presidentPortrait:portraitId,startYear:startYear,
+        phase:"election_campaign",dictatorship:false,electionsWon:0,nextElectionDate:null,
+        democracyIndex:55,
+        election:{
+          kind:/парламент|монарх/i.test(String(country.government_type||""))?"parliamentary":"presidential",
+          type:/парламент|монарх/i.test(String(country.government_type||""))?"Парламентские выборы":"Президентские выборы",
+          partyName:txt(input.partyName,80)||"Партия национального развития",
+          candidateSupport:Number(clampNumber(37+(course==="social_democracy"?2:course==="conservative"?1:0)+(difficulty==="easy"?4:difficulty==="hard"?-5:0),22,52).toFixed(1)),
+          oppositionSupport:45,actionsRemaining:4,actionsTaken:[],commissionControl:0,
+          scheduledDate:yearDate,firstElection:true,round:1
+        }
       };
       const effectBounds = key => key==="gdpGrowth"?[-20,30]:key==="inflation"?[0,200]:key==="unemployment"?[0,60]:key==="taxRate"?[0,70]:[0,100];
       for (const [key,value] of Object.entries(courseOptions[course].effects)) {
@@ -595,7 +858,7 @@ async function main(req,res,forcedPath) {
       state.stability = Number(clampNumber(state.stability + difficultyRule.stability,0,100).toFixed(2));
       state.debt = Number(clampNumber(state.debt + difficultyRule.debt,0,500).toFixed(2));
       const campaignTitle = txt(input.campaignTitle,90) || country.name_local || country.name_en;
-      const bio = "Глава государства. Политический курс: " + courseOptions[course].label + ". Сложность: " + difficultyRule.label + ".";
+      const bio = "Кандидат на общенациональных выборах. Политический курс: " + courseOptions[course].label + ". Сложность: " + difficultyRule.label + ".";
       const yearDate = String(startYear) + "-01-01";
       const cabinetPools = {
         AR:["Lucía Fernández","Mateo González","Valentina Rodríguez","Santiago López","Camila Martínez"],
@@ -630,11 +893,29 @@ async function main(req,res,forcedPath) {
           [gameUser.telegram_id,campaignTitle,country.id,president,age,bio,yearDate,JSON.stringify(state)]
         );
         const save = saveResult.rows[0];
+        const initialArchetypes=["technocrat","diplomat","hardliner","reformer","reformer"];
+        const initialPortraits=["p03","p08","p11","p05","p14"];
         for (let i=0;i<portfolios.length;i++) {
-          const face = "p" + String(crypto.randomInt(1,17)).padStart(2,"0");
+          const competence=crypto.randomInt(55,86), loyalty=crypto.randomInt(48,89);
+          const portfolioEffects={
+            "Финансы":{inflation:-0.04,budgetBalance:0.04},
+            "Иностранные дела":{gdpGrowth:0.03,stability:0.03},
+            "Оборона":{militaryPower:0.16,stability:0.08},
+            "Экономика":{gdpGrowth:0.11,unemployment:-0.05},
+            "Здравоохранение":{healthcare:0.18,approval:0.08}
+          }[portfolios[i]]||{};
+          const profileEffects={
+            technocrat:{gdpGrowth:0.08,inflation:-0.025},
+            diplomat:{stability:0.07,approval:0.06},
+            hardliner:{stability:0.15,approval:-0.08,corruption:0.04},
+            reformer:{publicServices:0.13,approval:0.11,stability:-0.03}
+          }[initialArchetypes[i]];
+          const effects={...portfolioEffects};
+          for (const [key,value] of Object.entries(profileEffects)) effects[key]=Number(((effects[key]||0)+value).toFixed(3));
+          const traits={portraitId:initialPortraits[i],archetype:initialArchetypes[i],archetypeLabel:({technocrat:"Технократ",diplomat:"Дипломат",hardliner:"Силовик",reformer:"Реформатор"})[initialArchetypes[i]],effects};
           await client.query(
             "INSERT INTO ministers(save_id,portfolio,full_name,age,competence,loyalty,approval,traits) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
-            [save.id,portfolios[i],ministerNames[i],crypto.randomInt(38,61),crypto.randomInt(48,86),crypto.randomInt(45,88),crypto.randomInt(42,72),JSON.stringify({portraitId:face})]
+            [save.id,portfolios[i],ministerNames[i],crypto.randomInt(38,61),competence,loyalty,crypto.randomInt(42,72),JSON.stringify(traits)]
           );
         }
         const neighbours = await client.query(
