@@ -94,31 +94,30 @@ function clampNumber(value, min, max) {
 function assessPolicy(order, state) {
   const text = String(order || "").toLowerCase();
   const gdp = clampNumber(state.gdp || 350, 1, 100000000);
-  const effect = { category: "general", budgetCost: 0, budgetRevenue: 0, approval: 0.3, stability: 0.2, gdpGrowth: 0, inflation: 0, unemployment: 0, publicServices: 0, militaryPower: 0, corruption: 0, taxRate: 0 };
-  if (/здрав|больниц|медицин|врач|клиник|health|hospital|medical/.test(text)) {
-    effect.category="health"; effect.budgetCost=+(gdp*0.003).toFixed(2); effect.approval=3; effect.stability=1.2; effect.publicServices=5; effect.gdpGrowth=0.05;
-  } else if (/образован|школ|университет|учител|education|school|university/.test(text)) {
-    effect.category="education"; effect.budgetCost=+(gdp*0.0025).toFixed(2); effect.approval=2.5; effect.publicServices=4; effect.gdpGrowth=0.12; effect.unemployment=-0.05;
-  } else if (/налог|ставк.*ндс|tax/.test(text) && /сниз|уменьш|сократ|reduce|lower|cut/.test(text)) {
-    effect.category="tax_cut"; effect.budgetCost=+(gdp*0.002).toFixed(2); effect.approval=2; effect.gdpGrowth=0.18; effect.inflation=0.08; effect.taxRate=-1;
-  } else if (/налог|tax/.test(text) && /повыс|увелич|поднять|raise|increase/.test(text)) {
-    effect.category="tax_increase"; effect.budgetRevenue=+(gdp*0.003).toFixed(2); effect.approval=-2; effect.stability=-0.3; effect.inflation=-0.05; effect.taxRate=1;
-  } else if (/арм|оборон|вооруж|военн|military|defen[cs]e|army/.test(text)) {
-    effect.category="defense"; effect.budgetCost=+(gdp*0.004).toFixed(2); effect.approval=0.4; effect.stability=0.4; effect.militaryPower=3.5;
-  } else if (/дорог|мост|инфраструкт|строительств|железн|транспорт|infrastructure|road|rail/.test(text)) {
-    effect.category="infrastructure"; effect.budgetCost=+(gdp*0.004).toFixed(2); effect.approval=1.5; effect.stability=0.5; effect.gdpGrowth=0.25; effect.unemployment=-0.25;
-  } else if (/коррупц|взятк|прозрачност|аудит|corruption|anti-corruption/.test(text)) {
-    effect.category="anti_corruption"; effect.budgetCost=+(gdp*0.0007).toFixed(2); effect.approval=2.5; effect.stability=1.4; effect.corruption=-5; effect.gdpGrowth=0.08;
-  } else if (/зарплат|пенси|пособ|субсиди|социальн|wage|pension|benefit|subsid/.test(text)) {
-    effect.category="social"; effect.budgetCost=+(gdp*0.0025).toFixed(2); effect.approval=2.8; effect.stability=0.8; effect.inflation=0.15; effect.unemployment=-0.08;
-  } else if (/энерг|электр|эколог|климат|энерго|energy|environment|climate/.test(text)) {
-    effect.category="energy_environment"; effect.budgetCost=+(gdp*0.002).toFixed(2); effect.approval=1.2; effect.gdpGrowth=0.16; effect.publicServices=1.5;
-  } else if (/внешн|дипломат|торгов|экспорт|импорт|соглашен|договор|foreign|diplomac|trade|export|import|treaty/.test(text)) {
-    effect.category="foreign_policy"; effect.budgetCost=+(gdp*0.0005).toFixed(2); effect.approval=0.5; effect.stability=0.6; effect.gdpGrowth=0.12;
-  } else {
-    effect.budgetCost=+(gdp*0.0005).toFixed(2);
-  }
-  return effect;
+  const catalogue = [
+    {match:/здрав|больниц|медицин|врач|клиник|health|hospital|medical/.test(text),category:"health",months:18,upfront:0.00075,monthly:0.00013,projectEffects:{healthcare:5,publicServices:2,approval:0.8}},
+    {match:/образован|школ|университет|учител|education|school|university/.test(text),category:"education",months:24,upfront:0.0008,monthly:0.00015,projectEffects:{education:6,gdpGrowth:0.45,unemployment:-0.35}},
+    {match:/налог|tax/.test(text)&&/сниз|уменьш|сократ|reduce|lower|cut/.test(text),category:"tax_cut",months:12,upfront:0.00055,monthly:0.00007,taxRate:-0.5,projectEffects:{gdpGrowth:0.38,approval:0.65,inflation:0.18}},
+    {match:/налог|tax/.test(text)&&/повыс|увелич|поднять|raise|increase/.test(text),category:"tax_increase",months:12,upfront:0.00035,monthly:0.00004,taxRate:0.5,projectEffects:{gdpGrowth:-0.18,approval:-0.7,inflation:-0.12,stability:0.15}},
+    {match:/арм|оборон|вооруж|военн|military|defen[cs]e|army/.test(text),category:"defense",months:18,upfront:0.001,monthly:0.00015,projectEffects:{militaryPower:3,stability:0.2}},
+    {match:/дорог|мост|инфраструкт|строительств|железн|транспорт|infrastructure|road|rail/.test(text),category:"infrastructure",months:24,upfront:0.001,monthly:0.00018,projectEffects:{infrastructure:7,gdpGrowth:0.55,unemployment:-0.4,approval:0.5}},
+    {match:/коррупц|взятк|прозрачност|аудит|corruption|anti-corruption/.test(text),category:"anti_corruption",months:18,upfront:0.00055,monthly:0.00008,projectEffects:{corruption:-5,approval:0.8,stability:1}},
+    {match:/зарплат|пенси|пособ|субсиди|социальн|wage|pension|benefit|subsid/.test(text),category:"social",months:12,upfront:0.0007,monthly:0.00013,projectEffects:{approval:1,unemployment:-0.2,inflation:0.18}},
+    {match:/энерг|электр|эколог|климат|энерго|energy|environment|climate/.test(text),category:"energy_environment",months:20,upfront:0.0009,monthly:0.00014,projectEffects:{infrastructure:2.5,gdpGrowth:0.25,inflation:-0.35}},
+    {match:/внешн|дипломат|торгов|экспорт|импорт|соглашен|договор|foreign|diplomac|trade|export|import|treaty/.test(text),category:"foreign_policy",months:12,upfront:0.00035,monthly:0.00005,projectEffects:{stability:0.3,gdpGrowth:0.12}},
+    {match:true,category:"general",months:6,upfront:0.00025,monthly:0.00004,projectEffects:{publicServices:0.5,approval:0.15}}
+  ];
+  const rule=catalogue.find(item=>item.match)||catalogue[catalogue.length-1];
+  return {
+    category:rule.category,
+    durationMonths:rule.months,
+    budgetCost:Number((gdp*rule.upfront).toFixed(2)),
+    budgetRevenue:0,
+    monthlyCost:Math.max(0.01,Number((gdp*rule.monthly).toFixed(2))),
+    announcementApproval:0.05,
+    taxRate:rule.taxRate||0,
+    projectEffects:rule.projectEffects
+  };
 }
 async function draftOfficialDocument(order, game, effects) {
   const fallbackTitle = ({
