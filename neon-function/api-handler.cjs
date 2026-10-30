@@ -86,6 +86,94 @@ async function userFor(req) {
   return r.rows[0] || null;
 }
 function txt(v,n) { return typeof v === "string" ? v.trim().slice(0,n) : ""; }
+
+function clampNumber(value, min, max) {
+  const n = Number(value);
+  return Math.max(min, Math.min(max, Number.isFinite(n) ? n : 0));
+}
+function assessPolicy(order, state) {
+  const text = String(order || "").toLowerCase();
+  const gdp = clampNumber(state.gdp || 350, 1, 100000000);
+  const effect = { category: "general", budgetCost: 0, budgetRevenue: 0, approval: 0.3, stability: 0.2, gdpGrowth: 0, inflation: 0, unemployment: 0, publicServices: 0, militaryPower: 0, corruption: 0, taxRate: 0 };
+  if (/здрав|больниц|медицин|врач|клиник|health|hospital|medical/.test(text)) {
+    effect.category="health"; effect.budgetCost=+(gdp*0.003).toFixed(2); effect.approval=3; effect.stability=1.2; effect.publicServices=5; effect.gdpGrowth=0.05;
+  } else if (/образован|школ|университет|учител|education|school|university/.test(text)) {
+    effect.category="education"; effect.budgetCost=+(gdp*0.0025).toFixed(2); effect.approval=2.5; effect.publicServices=4; effect.gdpGrowth=0.12; effect.unemployment=-0.05;
+  } else if (/налог|ставк.*ндс|tax/.test(text) && /сниз|уменьш|сократ|reduce|lower|cut/.test(text)) {
+    effect.category="tax_cut"; effect.budgetCost=+(gdp*0.002).toFixed(2); effect.approval=2; effect.gdpGrowth=0.18; effect.inflation=0.08; effect.taxRate=-1;
+  } else if (/налог|tax/.test(text) && /повыс|увелич|поднять|raise|increase/.test(text)) {
+    effect.category="tax_increase"; effect.budgetRevenue=+(gdp*0.003).toFixed(2); effect.approval=-2; effect.stability=-0.3; effect.inflation=-0.05; effect.taxRate=1;
+  } else if (/арм|оборон|вооруж|военн|military|defen[cs]e|army/.test(text)) {
+    effect.category="defense"; effect.budgetCost=+(gdp*0.004).toFixed(2); effect.approval=0.4; effect.stability=0.4; effect.militaryPower=3.5;
+  } else if (/дорог|мост|инфраструкт|строительств|железн|транспорт|infrastructure|road|rail/.test(text)) {
+    effect.category="infrastructure"; effect.budgetCost=+(gdp*0.004).toFixed(2); effect.approval=1.5; effect.stability=0.5; effect.gdpGrowth=0.25; effect.unemployment=-0.25;
+  } else if (/коррупц|взятк|прозрачност|аудит|corruption|anti-corruption/.test(text)) {
+    effect.category="anti_corruption"; effect.budgetCost=+(gdp*0.0007).toFixed(2); effect.approval=2.5; effect.stability=1.4; effect.corruption=-5; effect.gdpGrowth=0.08;
+  } else if (/зарплат|пенси|пособ|субсиди|социальн|wage|pension|benefit|subsid/.test(text)) {
+    effect.category="social"; effect.budgetCost=+(gdp*0.0025).toFixed(2); effect.approval=2.8; effect.stability=0.8; effect.inflation=0.15; effect.unemployment=-0.08;
+  } else if (/энерг|электр|эколог|климат|энерго|energy|environment|climate/.test(text)) {
+    effect.category="energy_environment"; effect.budgetCost=+(gdp*0.002).toFixed(2); effect.approval=1.2; effect.gdpGrowth=0.16; effect.publicServices=1.5;
+  } else if (/внешн|дипломат|торгов|экспорт|импорт|соглашен|договор|foreign|diplomac|trade|export|import|treaty/.test(text)) {
+    effect.category="foreign_policy"; effect.budgetCost=+(gdp*0.0005).toFixed(2); effect.approval=0.5; effect.stability=0.6; effect.gdpGrowth=0.12;
+  } else {
+    effect.budgetCost=+(gdp*0.0005).toFixed(2);
+  }
+  return effect;
+}
+async function draftOfficialDocument(order, game, effects) {
+  const fallbackTitle = ({
+    health:"О мерах по развитию системы здравоохранения",
+    education:"О развитии национальной системы образования",
+    tax_cut:"О корректировке налоговой политики",
+    tax_increase:"О внесении изменений в налоговую систему",
+    defense:"О развитии обороноспособности государства",
+    infrastructure:"О реализации программы развития инфраструктуры",
+    anti_corruption:"О мерах по противодействию коррупции",
+    social:"О мерах социальной поддержки населения",
+    energy_environment:"О развитии энергетики и охране окружающей среды",
+    foreign_policy:"О мерах по развитию внешнеэкономического сотрудничества",
+    general:"О мерах государственной политики"
+  })[effects.category] || "О мерах государственной политики";
+  const fallback = {
+    title:fallbackTitle,
+    summary:"Проект подготовлен по инициативе президента. Финансовые и социально-экономические последствия будут пересмотрены по итогам исполнения.",
+    body:"В целях реализации государственной политики и обеспечения устойчивого развития постановляю:\n\n1. Утвердить инициативу: «"+order+"».\n\n2. Правительству и профильным министерствам в течение 30 дней подготовить план реализации, источники финансирования и измеримые показатели эффективности.\n\n3. Министерству финансов обеспечить контроль бюджетных обязательств в пределах утверждённых ассигнований.\n\n4. Представить президенту доклад о ходе исполнения через 90 дней."
+  };
+  const apiKey=process.env.OPENROUTER_API_KEY;
+  const model=process.env.OPENROUTER_MODEL;
+  if (!apiKey || !model) return fallback;
+  try {
+    const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{
+      method:"POST",
+      headers:{"Authorization":"Bearer "+apiKey,"Content-Type":"application/json","HTTP-Referer":"https://merekwi.github.io/presedento-sim/","X-Title":"Presidential Simulator"},
+      body:JSON.stringify({
+        model,
+        temperature:0.35,
+        max_tokens:900,
+        messages:[
+          {role:"system",content:"Ты юридический редактор вымышленной политической стратегии. Составляй официальный проект указа на русском языке. Не выдумывай числовые экономические последствия. Возвращай только JSON с полями title, summary, body. body должен содержать преамбулу и пронумерованные пункты."},
+          {role:"user",content:JSON.stringify({country:game.name_local||game.name_en,president:game.president_name,initiative:order,returnSchema:{title:"string",summary:"string",body:"string"}})}
+        ]
+      }),
+      signal:AbortSignal.timeout(25000)
+    });
+    if (!response.ok) throw new Error("OpenRouter HTTP "+response.status);
+    const payload=await response.json();
+    const content=payload.choices?.[0]?.message?.content;
+    if (!content) return fallback;
+    const clean=String(content).replace(/^\s*```(?:json)?/i,"").replace(/```\s*$/,"").trim();
+    const parsed=JSON.parse(clean);
+    return {
+      title:typeof parsed.title==="string"&&parsed.title.trim()?parsed.title.trim().slice(0,220):fallback.title,
+      summary:typeof parsed.summary==="string"?parsed.summary.trim().slice(0,1200):fallback.summary,
+      body:typeof parsed.body==="string"&&parsed.body.trim()?parsed.body.trim().slice(0,12000):fallback.body
+    };
+  } catch (error) {
+    console.error("OpenRouter decree draft failed:",error.message);
+    return fallback;
+  }
+}
+
 async function main(req,res,forcedPath) {
   const path = forcedPath || (new URL(req.url,"https://localhost").pathname.replace(/\/+$/,"") || "/");
   setCors(req,res);
@@ -180,7 +268,79 @@ async function main(req,res,forcedPath) {
         "SELECT s.id,s.save_name,s.president_name,s.president_age,s.president_bio,s.game_date,s.turn_number,s.state,s.status,c.iso2,c.name_en,c.name_local,c.flag_emoji,c.government_type,c.region FROM game_saves s LEFT JOIN countries c ON c.id=s.country_id WHERE s.owner_user_id=$1 AND s.status='active' ORDER BY s.updated_at DESC LIMIT 1",
         [gameUser.telegram_id]
       );
-      return out(res,200,{game:result.rows[0] || null});
+      const game=result.rows[0] || null;
+      if (!game) return out(res,200,{game:null,ministers:[],relations:[],units:[],events:[],decrees:[]});
+      const [ministers,relations,units,events,decrees]=await Promise.all([
+        presidentialPool.query("SELECT id,portfolio,full_name,age,competence,loyalty,approval,traits FROM ministers WHERE save_id=$1 AND dismissed_at IS NULL ORDER BY portfolio",[game.id]),
+        presidentialPool.query("SELECT id,other_country_name,relation_score,status,treaties FROM diplomatic_relations WHERE save_id=$1 ORDER BY relation_score DESC",[game.id]),
+        presidentialPool.query("SELECT id,unit_type,quantity,readiness,supply FROM military_units WHERE save_id=$1 ORDER BY unit_type",[game.id]),
+        presidentialPool.query("SELECT id,game_date,event_type,headline,article,severity,effects FROM game_events WHERE save_id=$1 ORDER BY game_date DESC,created_at DESC LIMIT 12",[game.id]),
+        presidentialPool.query("SELECT id,decree_number,title,summary,body,status,effects,created_at,published_at FROM decrees WHERE save_id=$1 ORDER BY decree_number DESC LIMIT 12",[game.id])
+      ]);
+      return out(res,200,{game,ministers:ministers.rows,relations:relations.rows,units:units.rows,events:events.rows,decrees:decrees.rows});
+    }
+
+    if (path === "/api/presidential/game/decree/draft" && req.method === "POST") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const input=await readBody(req), order=txt(input.order,5000);
+      if (order.length<10) return out(res,400,{error:"initiative_too_short"});
+      const found=await presidentialPool.query("SELECT s.*,c.name_local,c.name_en FROM game_saves s LEFT JOIN countries c ON c.id=s.country_id WHERE s.owner_user_id=$1 AND s.status='active' ORDER BY s.updated_at DESC LIMIT 1",[gameUser.telegram_id]);
+      if (!found.rowCount) return out(res,409,{error:"start_a_game_first"});
+      const game=found.rows[0], effects=assessPolicy(order,game.state||{}), document=await draftOfficialDocument(order,game,effects);
+      const numberResult=await presidentialPool.query("SELECT COALESCE(MAX(decree_number),0)+1 AS next_number FROM decrees WHERE save_id=$1",[game.id]);
+      const inserted=await presidentialPool.query(
+        "INSERT INTO decrees(save_id,decree_number,title,summary,body,original_order,status,effects) VALUES($1,$2,$3,$4,$5,$6,'draft',$7::jsonb) RETURNING id,decree_number,title,summary,body,status,effects,created_at",
+        [game.id,numberResult.rows[0].next_number,document.title,document.summary,document.body,order,JSON.stringify({preview:effects})]
+      );
+      return out(res,201,{decree:inserted.rows[0]});
+    }
+
+    if (path === "/api/presidential/game/decree/publish" && req.method === "POST") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const input=await readBody(req), decreeId=txt(input.decreeId,64);
+      if (!/^[0-9a-f-]{36}$/i.test(decreeId)) return out(res,400,{error:"invalid_decree_id"});
+      const client=await presidentialPool.connect();
+      try {
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT s.* FROM game_saves s WHERE s.owner_user_id=$1 AND s.status='active' ORDER BY s.updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
+        const game=saved.rows[0];
+        const d=await client.query("SELECT * FROM decrees WHERE id=$1 AND save_id=$2 FOR UPDATE",[decreeId,game.id]);
+        if (!d.rowCount) { await client.query("ROLLBACK"); return out(res,404,{error:"decree_not_found"}); }
+        if (d.rows[0].status!=="draft") { await client.query("ROLLBACK"); return out(res,409,{error:"decree_not_draft"}); }
+        const effects=assessPolicy(d.rows[0].original_order,game.state||{});
+        const state={...(game.state||{})};
+        state.treasury=Number((Number(state.treasury||0)-effects.budgetCost+effects.budgetRevenue).toFixed(2));
+        state.budgetBalance=Number((Number(state.budgetBalance||0)-effects.budgetCost+effects.budgetRevenue).toFixed(2));
+        state.debt=clampNumber(Number(state.debt||0)+(effects.budgetCost/Math.max(1,Number(state.gdp||1)))*100,0,500);
+        state.approval=clampNumber(Number(state.approval||50)+effects.approval,0,100);
+        state.stability=clampNumber(Number(state.stability||50)+effects.stability,0,100);
+        state.gdpGrowth=clampNumber(Number(state.gdpGrowth||0)+effects.gdpGrowth,-20,30);
+        state.inflation=clampNumber(Number(state.inflation||0)+effects.inflation,0,200);
+        state.unemployment=clampNumber(Number(state.unemployment||0)+effects.unemployment,0,60);
+        state.publicServices=clampNumber(Number(state.publicServices||0)+effects.publicServices,0,100);
+        state.militaryPower=clampNumber(Number(state.militaryPower||0)+effects.militaryPower,0,100);
+        state.corruption=clampNumber(Number(state.corruption||0)+effects.corruption,0,100);
+        state.taxRate=clampNumber(Number(state.taxRate||0)+effects.taxRate,0,70);
+        state.gdp=Number((Number(state.gdp||0)*(1+Number(state.gdpGrowth||0)/1200)).toFixed(2));
+        const updated=await client.query(
+          "UPDATE game_saves SET state=$1::jsonb,turn_number=turn_number+1,game_date=game_date+interval '1 month',updated_at=now() WHERE id=$2 RETURNING id,game_date,turn_number,state",
+          [JSON.stringify(state),game.id]
+        );
+        await client.query("UPDATE decrees SET status='published',effects=$1::jsonb,published_at=now() WHERE id=$2",[JSON.stringify(effects),decreeId]);
+        await client.query(
+          "INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'decree',$3,$4,2,$5::jsonb)",
+          [game.id,updated.rows[0].game_date,d.rows[0].title,d.rows[0].summary+" "+d.rows[0].body.slice(0,900),JSON.stringify(effects)]
+        );
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'decree_published',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({decreeId,decreeNumber:d.rows[0].decree_number,effects})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,game:updated.rows[0],effects});
+      } catch(error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
     }
 
     if (path === "/api/presidential/game/new" && req.method === "POST") {
