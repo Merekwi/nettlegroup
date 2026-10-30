@@ -127,7 +127,7 @@ const CAMPAIGN_ISSUES=[
 ];
 function buildCampaignAgenda(){return CAMPAIGN_ISSUES.map(issue=>({id:issue.id,title:issue.title,context:issue.context,question:issue.question,indicators:issue.indicators.map(item=>({...item})),choices:issue.choices.map(({id,title,description,benefit,risk})=>({id,title,description,benefit,risk}))}));}
 function createVoterGroups(approval=45,difficultyOffset=0){
- const base=clampNumber(41+(Number(approval)-50)*0.18+difficultyOffset,30,55),offsets={workers:0,business:-2,rural:-1,youth:1,publicSector:0,conservative:-1},groups={};
+ const base=clampNumber(45+(Number(approval)-50)*0.18+difficultyOffset,32,60),offsets={workers:0,business:-2,rural:-1,youth:1,publicSector:0,conservative:-1},groups={};
  for(const [key,offset] of Object.entries(offsets))groups[key]=Number(clampNumber(base+offset+crypto.randomInt(-4,5),18,68).toFixed(1));
  return groups;
 }
@@ -953,7 +953,7 @@ async function main(req,res,forcedPath) {
       const policyCredibility=crypto.randomInt(50,66);
       const institutionalTrust=Number(clampNumber(state.democracyIndex+background.trust,5,95).toFixed(1));
       const campaignTitle=country.name_local||country.name_en;
-      const bio="Кандидат в президенты, "+age+" лет; "+background.label+". Имя, внешность и государство определены случайным образом. Сложность симуляции: "+difficultyRule.label.toLowerCase()+".";
+      const bio="Кандидат на выборную государственную должность, "+age+" лет; "+background.label+". Имя, внешность и государство определены случайным образом. Сложность симуляции: "+difficultyRule.label.toLowerCase()+"."
       state.election={
         kind:/парламент|монарх/i.test(String(country.government_type||""))?"parliamentary":"presidential",
         type:/парламент|монарх/i.test(String(country.government_type||""))?"Парламентские выборы":"Президентские выборы",
@@ -1049,7 +1049,7 @@ async function main(req,res,forcedPath) {
           );
         }
         const startArticle="В "+(country.name_local||country.name_en)+" начинается общенациональная избирательная кампания. Кандидат "+president+", "+age+" лет, выдвинут партией «"+state.election.partyName+"». Биография кандидата: "+background.label+". Стартовые условия: "+difficultyRule.label.toLowerCase()+".";
-        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'election_campaign',$3,$4,2,'{}'::jsonb)",[save.id,yearDate,"Партия выдвинула кандидата в президенты",startArticle]);
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'election_campaign',$3,$4,2,'{}'::jsonb)",[save.id,yearDate,"Партия выдвинула кандидата на общенациональные выборы",startArticle]);
         await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'campaign_created',$3::jsonb)",[
           gameUser.id,save.id,JSON.stringify({countryId:country.id,iso2:country.iso2,presidentName:president,presidentAge:age,difficulty,startYear,portraitId,randomized:true})
         ]);
