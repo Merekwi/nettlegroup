@@ -827,54 +827,62 @@ async function main(req,res,forcedPath) {
 
     if (path === "/api/presidential/game/decree/publish" && req.method === "POST") {
       if (!gameUser) return out(res,401,{error:"authentication_required"});
-      const input=await readBody(req), decreeId=txt(input.decreeId,64);
-      if (!/^[0-9a-f-]{36}$/i.test(decreeId)) return out(res,400,{error:"invalid_decree_id"});
+      const input=await readBody(req),decreeId=txt(input.decreeId,64);
+      if(!/^[0-9a-f-]{36}$/i.test(decreeId))return out(res,400,{error:"invalid_decree_id"});
       const client=await presidentialPool.connect();
-      try {
+      try{
         await client.query("BEGIN");
         const saved=await client.query("SELECT s.* FROM game_saves s WHERE s.owner_user_id=$1 AND s.status='active' ORDER BY s.updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
-        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
-        const game=saved.rows[0];
-        if ((game.state||{}).phase && (game.state||{}).phase!=="government") { await client.query("ROLLBACK"); return out(res,409,{error:"election_campaign_in_progress"}); }
+        if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
+        const game=saved.rows[0],state={...(game.state||{})};
+        if(state.phase&&state.phase!=="government"){await client.query("ROLLBACK");return out(res,409,{error:"election_campaign_in_progress"});}
         const d=await client.query("SELECT * FROM decrees WHERE id=$1 AND save_id=$2 FOR UPDATE",[decreeId,game.id]);
-        if (!d.rowCount) { await client.query("ROLLBACK"); return out(res,404,{error:"decree_not_found"}); }
-        if (d.rows[0].status!=="draft") { await client.query("ROLLBACK"); return out(res,409,{error:"decree_not_draft"}); }
-        const state={...(game.state||{})};
+        if(!d.rowCount){await client.query("ROLLBACK");return out(res,404,{error:"decree_not_found"});}
+        if(d.rows[0].status!=="draft"){await client.query("ROLLBACK");return out(res,409,{error:"decree_not_draft"});}
         const actionPoints=Number.isFinite(Number(state.actionPoints))?Number(state.actionPoints):2;
-        if (actionPoints<1) { await client.query("ROLLBACK"); return out(res,409,{error:"no_action_points"}); }
+        if(actionPoints<1){await client.query("ROLLBACK");return out(res,409,{error:"no_action_points"});}
+        const projects=Array.isArray(state.projects)?state.projects:[];
+        if(projects.filter(project=>project.status==="active").length>=3){await client.query("ROLLBACK");return out(res,409,{error:"too_many_active_programs"});}
         const effects=assessPolicy(d.rows[0].original_order,state);
+        const treasury=Number(state.treasury||0);
+        if(treasury<effects.budgetCost){await client.query("ROLLBACK");return out(res,409,{error:"insufficient_treasury",required:effects.budgetCost,available:treasury});}
         state.actionPoints=actionPoints-1;
-        state.treasury=Number((Number(state.treasury||0)-effects.budgetCost+effects.budgetRevenue).toFixed(2));
+        state.treasury=Number((treasury-effects.budgetCost+effects.budgetRevenue).toFixed(2));
         state.budgetBalance=Number((Number(state.budgetBalance||0)-effects.budgetCost+effects.budgetRevenue).toFixed(2));
         state.debt=clampNumber(Number(state.debt||0)+(effects.budgetCost/Math.max(1,Number(state.gdp||1)))*100,0,500);
-        state.approval=clampNumber(Number(state.approval||50)+effects.approval,0,100);
-        state.stability=clampNumber(Number(state.stability||50)+effects.stability,0,100);
-        state.gdpGrowth=clampNumber(Number(state.gdpGrowth||0)+effects.gdpGrowth,-20,30);
-        state.inflation=clampNumber(Number(state.inflation||0)+effects.inflation,0,200);
-        state.unemployment=clampNumber(Number(state.unemployment||0)+effects.unemployment,0,60);
-        state.publicServices=clampNumber(Number(state.publicServices||0)+effects.publicServices,0,100);
-        state.militaryPower=clampNumber(Number(state.militaryPower||0)+effects.militaryPower,0,100);
-        state.corruption=clampNumber(Number(state.corruption||0)+effects.corruption,0,100);
-        state.taxRate=clampNumber(Number(state.taxRate||0)+effects.taxRate,0,70);
-        state.gdp=Number((Number(state.gdp||0)*(1+Number(state.gdpGrowth||0)/1200)).toFixed(2));
-        const updated=await client.query(
-          "UPDATE game_saves SET state=$1::jsonb,turn_number=turn_number+1,game_date=game_date+interval '1 month',updated_at=now() WHERE id=$2 RETURNING id,game_date,turn_number,state",
-          [JSON.stringify(state),game.id]
-        );
+        if(effects.taxRate)state.taxRate=clampNumber(Number(state.taxRate||0)+effects.taxRate,0,70);
+        state.approval=clampNumber(Number(state.approval||50)+Number(effects.announcementApproval||0),0,100);
+        const project={
+          projectId:"decree_"+decreeId,
+          title:d.rows[0].title,
+          category:effects.category,
+          durationMonths:effects.durationMonths,
+          monthsCompleted:0,
+          upfrontCost:effects.budgetCost,
+          monthlyCost:effects.monthlyCost,
+          effects:effects.projectEffects,
+          status:"active",
+          paused:false,
+          sourceDecreeId:decreeId,
+          decreeNumber:d.rows[0].decree_number,
+          startedAt:String(game.game_date).slice(0,10)
+        };
+        projects.push(project);
+        state.projects=projects;
+        const updated=await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2 RETURNING id,game_date,turn_number,state",[JSON.stringify(state),game.id]);
         await client.query("UPDATE decrees SET status='published',effects=$1::jsonb,published_at=now() WHERE id=$2",[JSON.stringify(effects),decreeId]);
+        const article="Указ №"+d.rows[0].decree_number+" опубликован. Ответственное министерство приступает к исполнению программы сроком "+effects.durationMonths+" месяцев. Первоначальное финансирование составляет "+effects.budgetCost+" млрд $, последующее ежемесячное финансирование — "+effects.monthlyCost+" млрд $. Результаты будут учитываться по мере выполнения мероприятий.";
         await client.query(
-          "INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'decree',$3,$4,2,$5::jsonb)",
-          [game.id,updated.rows[0].game_date,d.rows[0].title,d.rows[0].summary+" "+d.rows[0].body.slice(0,900),JSON.stringify(effects)]
+          "INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'decree',$3,$4,1,$5::jsonb)",
+          [game.id,game.game_date,d.rows[0].title,article,JSON.stringify({decreeId,decreeNumber:d.rows[0].decree_number,projectId:project.projectId,effects})]
         );
-        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'decree_published',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({decreeId,decreeNumber:d.rows[0].decree_number,effects})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'decree_published',$3::jsonb)",[
+          gameUser.id,game.id,JSON.stringify({decreeId,decreeNumber:d.rows[0].decree_number,project,effects})
+        ]);
         await client.query("COMMIT");
-        return out(res,200,{ok:true,game:updated.rows[0],effects});
-      } catch(error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
+        return out(res,200,{ok:true,game:updated.rows[0],effects,project});
+      }catch(error){await client.query("ROLLBACK");throw error;}
+      finally{client.release();}
     }
 
     if (path === "/api/presidential/game/new" && req.method === "POST") {
