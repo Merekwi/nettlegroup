@@ -285,6 +285,190 @@ async function main(req,res,forcedPath) {
       return out(res,200,{game,ministers:ministers.rows,relations:relations.rows,units:units.rows,events:events.rows,decrees:decrees.rows});
     }
 
+    if (path === "/api/presidential/game/action" && req.method === "POST") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const input=await readBody(req), action=txt(input.action,64);
+      const policies = {
+        public_health:{title:"Инвестиции в здравоохранение",cost:0.0016,event:"Правительство утвердило программу модернизации здравоохранения",article:"Началось финансирование медицинских учреждений и расширение доступа к базовым услугам.",effects:{healthcare:5,publicServices:1.5,approval:0.8,stability:0.4,gdpGrowth:0.03}},
+        education:{title:"Реформа образования",cost:0.0014,event:"Утверждена национальная программа образования",article:"Средства направлены на школы, университеты и программы подготовки специалистов.",effects:{education:5,publicServices:1,approval:0.7,gdpGrowth:0.12,unemployment:-0.08}},
+        infrastructure:{title:"Инфраструктурная программа",cost:0.0024,event:"Запущена программа развития инфраструктуры",article:"Правительство выделило финансирование на дороги, железнодорожные узлы и логистику.",effects:{infrastructure:5,gdpGrowth:0.2,approval:0.7,unemployment:-0.15}},
+        tax_relief:{title:"Снижение налоговой нагрузки",cost:0.0012,event:"Президент подписал налоговую реформу",article:"Налоговая нагрузка для бизнеса снижена. Правительство рассчитывает на рост инвестиций и деловой активности.",effects:{taxRate:-1,gdpGrowth:0.2,approval:1.2,inflation:0.08}},
+        anti_corruption:{title:"Антикоррупционная кампания",cost:0.0006,event:"Начата общенациональная антикоррупционная кампания",article:"Введены дополнительные проверки государственных закупок и новые механизмы общественного контроля.",effects:{corruption:-5,approval:1.5,stability:1.2,gdpGrowth:0.06}},
+        defense:{title:"Модернизация вооружённых сил",cost:0.003,event:"Утверждён план модернизации вооружённых сил",article:"Дополнительные средства направлены на подготовку, техническое обслуживание и снабжение воинских подразделений.",effects:{militaryPower:3.5,stability:0.3,approval:0.2}}
+      };
+      const policy=policies[action];
+      if (!policy) return out(res,400,{error:"unknown_policy"});
+      const client=await presidentialPool.connect();
+      try {
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
+        const game=saved.rows[0], state={...(game.state||{})};
+        const points=Number.isFinite(Number(state.actionPoints))?Number(state.actionPoints):2;
+        if (points<1) { await client.query("ROLLBACK"); return out(res,409,{error:"no_action_points"}); }
+        const cost=Number((Math.max(1,Number(state.gdp||350))*policy.cost).toFixed(2));
+        const treasury=Number(state.treasury||0);
+        if (treasury<cost) { await client.query("ROLLBACK"); return out(res,409,{error:"insufficient_treasury",required:cost,available:treasury}); }
+        state.treasury=Number((treasury-cost).toFixed(2));
+        state.budgetBalance=Number((Number(state.budgetBalance||0)-cost).toFixed(2));
+        for (const [key,value] of Object.entries(policy.effects)) {
+          const current=Number(state[key]||0);
+          const bounds=key==="gdpGrowth"?[-20,30]:key==="inflation"?[0,200]:key==="unemployment"?[0,60]:key==="taxRate"?[0,70]:[0,100];
+          state[key]=Number(clampNumber(current+value,bounds[0],bounds[1]).toFixed(2));
+        }
+        state.actionPoints=points-1;
+        const updated=await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2 RETURNING id,state,game_date,turn_number",[JSON.stringify(state),game.id]);
+        if (action==="defense") await client.query("UPDATE military_units SET readiness=LEAST(100,readiness+4),supply=LEAST(100,supply+3),updated_at=now() WHERE save_id=$1",[game.id]);
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'government_action',$3,$4,2,$5::jsonb)",[game.id,game.game_date,policy.event,policy.article,JSON.stringify({action,cost,effects:policy.effects})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'policy_action',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({action,cost,actionPoints:state.actionPoints})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,game:updated.rows[0],cost,actionPoints:state.actionPoints});
+      } catch(error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    if (path === "/api/presidential/game/advance" && req.method === "POST") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const client=await presidentialPool.connect();
+      try {
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
+        const game=saved.rows[0], state={...(game.state||{})};
+        const gdp=Math.max(1,Number(state.gdp||350));
+        const oldGrowth=Number(state.gdpGrowth||2);
+        const infrastructure=Number(state.infrastructure||52), education=Number(state.education||55), corruption=Number(state.corruption||34);
+        const growth=clampNumber(oldGrowth+(infrastructure-50)*0.002+(education-50)*0.001-(corruption-30)*0.0005,-15,20);
+        state.gdpGrowth=Number(growth.toFixed(2));
+        const randomEvents=[
+          {type:"economy",headline:"Иностранные инвесторы расширяют присутствие",article:"Несколько международных компаний объявили о новых вложениях в экономику страны. Министерство экономики ожидает дополнительные рабочие места.",approval:1.2,stability:0.2,growth:0.15,treasury:0.55,inflation:0.02},
+          {type:"society",headline:"Профсоюзы требуют повышения доходов",article:"Крупные профсоюзные объединения провели переговоры с правительством. Кабинету министров предстоит найти баланс между зарплатами и инфляцией.",approval:-1.4,stability:-0.5,growth:0,treasury:-0.15,inflation:0.08},
+          {type:"economy",headline:"Центральный банк сохранил ключевую ставку",article:"Регулятор решил не менять денежно-кредитную политику и продолжить наблюдение за инфляционными рисками.",approval:0.2,stability:0.4,growth:0.02,treasury:0,inflation:-0.08},
+          {type:"politics",headline:"Оппозиция потребовала парламентских слушаний",article:"Оппозиционные фракции инициировали обсуждение эффективности государственных расходов. Правительству предстоит представить отчёт.",approval:-0.8,stability:-0.4,growth:0,treasury:0,inflation:0},
+          {type:"diplomacy",headline:"Партнёры предложили расширить торговлю",article:"Дипломатические каналы передали предложение о расширении экономического сотрудничества. Министерство иностранных дел готовит переговорную позицию.",approval:0.5,stability:0.3,growth:0.12,treasury:0.25,inflation:0},
+          {type:"society",headline:"Правительство получило поддержку общественных организаций",article:"Общественные организации положительно оценили последние государственные программы и предложили совместные социальные проекты.",approval:1.1,stability:0.6,growth:0.02,treasury:-0.08,inflation:0},
+          {type:"crisis",headline:"Погодные условия осложнили работу инфраструктуры",article:"Неблагоприятная погода привела к локальным перебоям в транспортной системе. Региональным властям поручено восстановить движение.",approval:-0.6,stability:-0.2,growth:-0.08,treasury:-0.35,inflation:0.05},
+          {type:"politics",headline:"Аудит выявил нарушения в закупках",article:"Контрольные органы сообщили о нарушениях в нескольких государственных контрактах. Начата проверка, профильному министерству поручено представить предложения.",approval:corruption>40?-1.8:0.5,stability:-0.2,growth:-0.03,treasury:-0.1,inflation:0}
+        ];
+        const event=randomEvents[crypto.randomInt(randomEvents.length)];
+        state.gdpGrowth=clampNumber(state.gdpGrowth+event.growth,-15,20);
+        const monthlyBalance=Number((gdp*((Number(state.taxRate||22)-21.5)/100/12)).toFixed(2));
+        state.treasury=Number(Math.max(0,Number(state.treasury||0)+monthlyBalance+event.treasury).toFixed(2));
+        state.budgetBalance=monthlyBalance;
+        state.debt=Number(clampNumber(Number(state.debt||0)+(monthlyBalance<0?Math.abs(monthlyBalance)/gdp*100:0),0,500).toFixed(2));
+        state.gdp=Number((gdp*(1+state.gdpGrowth/1200)).toFixed(2));
+        state.inflation=Number(clampNumber(Number(state.inflation||3)+event.inflation+(state.gdpGrowth>5?0.07:-0.02)+(Math.random()-0.5)*0.08,0,100).toFixed(2));
+        state.unemployment=Number(clampNumber(Number(state.unemployment||5)-state.gdpGrowth*0.018+0.015+(Math.random()-0.5)*0.12,0,60).toFixed(2));
+        state.approval=Number(clampNumber(Number(state.approval||50)+event.approval+(Number(state.publicServices||58)-55)*0.012-(state.inflation-3)*0.035,0,100).toFixed(2));
+        state.stability=Number(clampNumber(Number(state.stability||60)+event.stability+(state.approval-50)*0.012-(corruption-35)*0.008,0,100).toFixed(2));
+        state.actionPoints=2;
+        const updated=await client.query("UPDATE game_saves SET state=$1::jsonb,turn_number=turn_number+1,game_date=game_date+interval '1 month',updated_at=now() WHERE id=$2 RETURNING id,game_date,turn_number,state",[JSON.stringify(state),game.id]);
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)",[game.id,updated.rows[0].game_date,event.type,event.headline,event.article,event.type==="crisis"?3:2,JSON.stringify({approval:event.approval,stability:event.stability,gdpGrowth:event.growth,treasury:event.treasury,monthlyBudget:monthlyBalance})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'month_advanced',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({turn:updated.rows[0].turn_number,event:event.type,monthlyBudget:monthlyBalance})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,game:updated.rows[0],event:{type:event.type,headline:event.headline,article:event.article},monthlyBudget:monthlyBalance});
+      } catch(error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    if (path === "/api/presidential/game/minister" && req.method === "POST") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const input=await readBody(req), action=txt(input.action,32);
+      const portfolios=["Финансы","Иностранные дела","Оборона","Экономика","Здравоохранение","Образование","Внутренние дела"];
+      if (!["appoint","dismiss"].includes(action)) return out(res,400,{error:"invalid_minister_action"});
+      const client=await presidentialPool.connect();
+      try {
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
+        const game=saved.rows[0], state={...(game.state||{})};
+        let headline,article,minister;
+        if (action==="appoint") {
+          const name=txt(input.name,100), portfolio=txt(input.portfolio,80), age=Number(input.age);
+          if (name.length<3||!portfolios.includes(portfolio)||!Number.isInteger(age)||age<25||age>90) {
+            await client.query("ROLLBACK");
+            return out(res,400,{error:"invalid_minister_details"});
+          }
+          const occupied=await client.query("SELECT id FROM ministers WHERE save_id=$1 AND portfolio=$2 AND dismissed_at IS NULL",[game.id,portfolio]);
+          if (occupied.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"portfolio_already_filled"}); }
+          const inserted=await client.query("INSERT INTO ministers(save_id,portfolio,full_name,age,competence,loyalty,approval,traits) VALUES($1,$2,$3,$4,$5,$6,$7,'[]'::jsonb) RETURNING id,portfolio,full_name,age,competence,loyalty,approval,traits",[game.id,portfolio,name,age,crypto.randomInt(42,91),crypto.randomInt(38,91),crypto.randomInt(42,81)]);
+          minister=inserted.rows[0];
+          state.stability=clampNumber(Number(state.stability||50)+0.4,0,100);
+          headline="Президент назначил нового министра";
+          article=name+" возглавил(а) направление «"+portfolio+"». Новый руководитель приступает к работе.";
+        } else {
+          const ministerId=txt(input.ministerId,64);
+          if (!/^[0-9a-f-]{36}$/i.test(ministerId)) { await client.query("ROLLBACK"); return out(res,400,{error:"invalid_minister_id"}); }
+          const removed=await client.query("UPDATE ministers SET dismissed_at=now() WHERE id=$1 AND save_id=$2 AND dismissed_at IS NULL RETURNING id,portfolio,full_name,loyalty",[ministerId,game.id]);
+          if (!removed.rowCount) { await client.query("ROLLBACK"); return out(res,404,{error:"minister_not_found"}); }
+          minister=removed.rows[0];
+          state.stability=clampNumber(Number(state.stability||50)-0.35,0,100);
+          state.approval=clampNumber(Number(state.approval||50)+(Number(minister.loyalty)<40?0.4:-0.2),0,100);
+          headline="В правительстве произошла отставка";
+          article=minister.full_name+" покинул(а) пост министра («"+minister.portfolio+"»). Президенту предстоит назначить нового руководителя.";
+        }
+        await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",[JSON.stringify(state),game.id]);
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'government',$3,$4,2,$5::jsonb)",[game.id,game.game_date,headline,article,JSON.stringify({action,minister:minister.id})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,$3,$4::jsonb)",[gameUser.id,game.id,"minister_"+action,JSON.stringify({ministerId:minister.id,portfolio:minister.portfolio})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,minister});
+      } catch(error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    if (path === "/api/presidential/game/diplomacy" && req.method === "POST") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const input=await readBody(req), action=txt(input.action,32), relationId=txt(input.relationId,64);
+      const operations={
+        summit:{score:12,cost:0.08,growth:0.02,approval:0.35,headline:"Проведён дипломатический саммит",verb:"Стороны договорились продолжить политический диалог и укрепить двусторонние контакты."},
+        trade:{score:9,cost:0.15,growth:0.12,approval:0.2,headline:"Начаты переговоры о торговом соглашении",verb:"Стороны обсудили снижение торговых барьеров и расширение экономического сотрудничества."},
+        sanctions:{score:-18,cost:0.04,growth:-0.08,approval:-0.3,headline:"Правительство объявило о введении ограничительных мер",verb:"Дипломатические отношения осложнились. Министерства оценивают возможные ответные шаги."}
+      };
+      const operation=operations[action];
+      if (!operation||!/^[0-9a-f-]{36}$/i.test(relationId)) return out(res,400,{error:"invalid_diplomatic_action"});
+      const client=await presidentialPool.connect();
+      try {
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
+        const game=saved.rows[0], state={...(game.state||{})}, points=Number.isFinite(Number(state.actionPoints))?Number(state.actionPoints):2;
+        if (points<1) { await client.query("ROLLBACK"); return out(res,409,{error:"no_action_points"}); }
+        const relationResult=await client.query("SELECT * FROM diplomatic_relations WHERE id=$1 AND save_id=$2 FOR UPDATE",[relationId,game.id]);
+        if (!relationResult.rowCount) { await client.query("ROLLBACK"); return out(res,404,{error:"diplomatic_relation_not_found"}); }
+        const relation=relationResult.rows[0], score=clampNumber(Number(relation.relation_score)+operation.score,-100,100);
+        const status=score>=50?"allied":score<=-45?"hostile":"neutral";
+        const updatedRelation=await client.query("UPDATE diplomatic_relations SET relation_score=$1,status=$2,updated_at=now() WHERE id=$3 RETURNING id,other_country_name,relation_score,status,treaties",[score,status,relationId]);
+        const cost=operation.cost;
+        state.treasury=Number(Math.max(0,Number(state.treasury||0)-cost).toFixed(2));
+        state.budgetBalance=Number((Number(state.budgetBalance||0)-cost).toFixed(2));
+        state.gdpGrowth=clampNumber(Number(state.gdpGrowth||0)+operation.growth,-20,30);
+        state.approval=clampNumber(Number(state.approval||50)+operation.approval,0,100);
+        state.actionPoints=points-1;
+        await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",[JSON.stringify(state),game.id]);
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'diplomacy',$3,$4,2,$5::jsonb)",[game.id,game.game_date,operation.headline,relation.other_country_name+": "+operation.verb,JSON.stringify({action,country:relation.other_country_name,relationScore:score,cost})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'diplomatic_action',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({action,country:relation.other_country_name,relationScore:score})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,relation:updatedRelation.rows[0],actionPoints:state.actionPoints});
+      } catch(error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
     if (path === "/api/presidential/game/decree/draft" && req.method === "POST") {
       if (!gameUser) return out(res,401,{error:"authentication_required"});
       const input=await readBody(req), order=txt(input.order,5000);
@@ -372,7 +556,11 @@ async function main(req,res,forcedPath) {
         publicServices: 58,
         corruption: 34,
         debt: Number(baseline.debt || 55),
-        taxRate: Number(baseline.taxRate || 22)
+        taxRate: Number(baseline.taxRate || 22),
+        education: Number(baseline.education || 55),
+        healthcare: Number(baseline.healthcare || 58),
+        infrastructure: Number(baseline.infrastructure || 52),
+        actionPoints: 2
       };
       const client = await presidentialPool.connect();
       try {
