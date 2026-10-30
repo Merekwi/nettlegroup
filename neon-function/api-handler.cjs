@@ -366,7 +366,7 @@ async function main(req,res,forcedPath) {
         state.approval=Number(clampNumber(Number(state.approval||50)+event.approval+(Number(state.publicServices||58)-55)*0.012-(state.inflation-3)*0.035,0,100).toFixed(2));
         state.stability=Number(clampNumber(Number(state.stability||60)+event.stability+(state.approval-50)*0.012-(corruption-35)*0.008,0,100).toFixed(2));
         state.actionPoints=2;
-        const updated=await client.query("UPDATE game_saves SET state=$1::jsonb,turn_number=turn_number+1,game_date=game_date+interval '1 month',updated_at=now() WHERE id=$2 RETURNING id,game_date,turn_number,state",[JSON.stringify(state),game.id]);
+        const updated=await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2 RETURNING id,game_date,turn_number,state",[JSON.stringify(state),game.id]);
         await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)",[game.id,updated.rows[0].game_date,event.type,event.headline,event.article,event.type==="crisis"?3:2,JSON.stringify({approval:event.approval,stability:event.stability,gdpGrowth:event.growth,treasury:event.treasury,monthlyBudget:monthlyBalance})]);
         await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'month_advanced',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({turn:updated.rows[0].turn_number,event:event.type,monthlyBudget:monthlyBalance})]);
         await client.query("COMMIT");
@@ -497,8 +497,11 @@ async function main(req,res,forcedPath) {
         const d=await client.query("SELECT * FROM decrees WHERE id=$1 AND save_id=$2 FOR UPDATE",[decreeId,game.id]);
         if (!d.rowCount) { await client.query("ROLLBACK"); return out(res,404,{error:"decree_not_found"}); }
         if (d.rows[0].status!=="draft") { await client.query("ROLLBACK"); return out(res,409,{error:"decree_not_draft"}); }
-        const effects=assessPolicy(d.rows[0].original_order,game.state||{});
         const state={...(game.state||{})};
+        const actionPoints=Number.isFinite(Number(state.actionPoints))?Number(state.actionPoints):2;
+        if (actionPoints<1) { await client.query("ROLLBACK"); return out(res,409,{error:"no_action_points"}); }
+        const effects=assessPolicy(d.rows[0].original_order,state);
+        state.actionPoints=actionPoints-1;
         state.treasury=Number((Number(state.treasury||0)-effects.budgetCost+effects.budgetRevenue).toFixed(2));
         state.budgetBalance=Number((Number(state.budgetBalance||0)-effects.budgetCost+effects.budgetRevenue).toFixed(2));
         state.debt=clampNumber(Number(state.debt||0)+(effects.budgetCost/Math.max(1,Number(state.gdp||1)))*100,0,500);
