@@ -136,6 +136,69 @@ function calculateCampaignSupport(groups,credibility=55,institutionalTrust=55,fi
  return Number(clampNumber(weighted+(Number(credibility)-55)*0.07+(Number(institutionalTrust)-55)*0.04-Math.max(0,Number(fiscalImpactPct||0)-1.1)*0.45,5,85).toFixed(1));
 }
 
+
+const DEFAULT_CONSTITUTION_ARTICLES = [
+{id:"executive",title:"Исполнительная власть",text:"Полномочия главы государства ограничены Конституцией, законом и механизмами парламентского и судебного контроля."},
+{id:"legislature",title:"Законодательная власть",text:"Законодательная власть осуществляется парламентом, избираемым на основе всеобщего и равного избирательного права."},
+{id:"judiciary",title:"Судебная власть",text:"Судебная власть независима. Судьи подчиняются Конституции и закону; вмешательство в правосудие запрещено."},
+{id:"elections",title:"Выборы и политическое представительство",text:"Выборы проводятся периодически, на основе равного, прямого и тайного голосования при политическом плюрализме."},
+{id:"rights",title:"Права и свободы человека",text:"Государство признаёт и гарантирует основные права и свободы человека, равенство перед законом и судебную защиту."},
+{id:"regions",title:"Территориальное устройство",text:"Полномочия центральных и региональных органов разграничиваются законом с соблюдением единства государства."}
+];
+function ensureInstitutionalState(state){
+  if(!Number.isFinite(Number(state.actionPoints)))state.actionPoints=2;
+  if(!state.constitution||typeof state.constitution!=="object")state.constitution={version:1,articles:DEFAULT_CONSTITUTION_ARTICLES.map(item=>({...item})),proposals:[],history:[]};
+  if(!Array.isArray(state.constitution.articles)||!state.constitution.articles.length)state.constitution.articles=DEFAULT_CONSTITUTION_ARTICLES.map(item=>({...item}));
+  if(!Array.isArray(state.constitution.proposals))state.constitution.proposals=[];
+  if(!Array.isArray(state.constitution.history))state.constitution.history=[];
+  if(!Array.isArray(state.referendums))state.referendums=[];
+  if(!state.parliament||typeof state.parliament!=="object"){
+    const seats=clampNumber(50+(Number(state.approval||45)-45)*0.30+crypto.randomInt(-5,6),30,72);
+    state.parliament={totalSeats:250,governmentSeats:Number(seats.toFixed(1)),oppositionSeats:Number((100-seats).toFixed(1)),lastVote:null};
+  }
+  return state;
+}
+function opinionScore(groups){
+  return Object.entries(CAMPAIGN_GROUP_WEIGHTS).reduce((sum,[key,weight])=>sum+Number(groups&&groups[key]||50)*weight,0);
+}
+function makeConstitutionalOpinion(state,articleId){
+  const existing=state.election&&state.election.voterGroups;
+  const groups={...(existing&&typeof existing==="object"?existing:createVoterGroups(Number(state.approval||45),0))};
+  const base=48+(Number(state.approval||45)-50)*0.12+(Number(state.stability||55)-55)*0.05-(Number(state.corruption||30)-30)*0.035;
+  const shifts={
+    executive:{workers:-1,business:1,rural:1,youth:-3,publicSector:3,conservative:4},
+    legislature:{workers:3,business:1,rural:2,youth:5,publicSector:-1,conservative:-2},
+    judiciary:{workers:2,business:6,rural:1,youth:7,publicSector:-4,conservative:-3},
+    elections:{workers:3,business:2,rural:2,youth:8,publicSector:-1,conservative:-4},
+    rights:{workers:5,business:1,rural:2,youth:7,publicSector:1,conservative:-3},
+    regions:{workers:2,business:-2,rural:9,youth:3,publicSector:3,conservative:1}
+  };
+  for(const key of Object.keys(CAMPAIGN_GROUP_WEIGHTS))groups[key]=Number(clampNumber(base+(Number(groups[key]||45)-45)*0.28+Number((shifts[articleId]||{})[key]||0)+crypto.randomInt(-5,6),8,92).toFixed(1));
+  return groups;
+}
+function makeReferendumOpinion(state,topic){
+  const base=47+(Number(state.approval||45)-50)*0.12+(Number(state.stability||55)-55)*0.045;
+  const current={
+    economy:(Number(state.gdpGrowth||2)-2)*1.25-(Number(state.inflation||3)-3)*1.0-(Number(state.unemployment||5)-5)*0.65,
+    social:(Number(state.publicServices||50)-50)*0.16+(Number(state.healthcare||50)-50)*0.08,
+    institutions:(Number(state.democracyIndex||50)-50)*0.14-(Number(state.corruption||30)-30)*0.08,
+    security:(Number(state.militaryPower||50)-50)*0.08+(Number(state.stability||55)-55)*0.07,
+    regions:(Number(state.infrastructure||50)-50)*0.08+(Number(state.publicServices||50)-50)*0.08,
+    general:0
+  }[topic]||0;
+  const shifts={
+    economy:{workers:-1,business:7,rural:1,youth:2,publicSector:1,conservative:2},
+    social:{workers:7,business:-3,rural:4,youth:5,publicSector:3,conservative:-2},
+    institutions:{workers:2,business:4,rural:1,youth:7,publicSector:-2,conservative:-2},
+    security:{workers:0,business:2,rural:1,youth:1,publicSector:4,conservative:6},
+    regions:{workers:2,business:-2,rural:8,youth:3,publicSector:4,conservative:1},
+    general:{workers:0,business:0,rural:0,youth:0,publicSector:0,conservative:0}
+  }[topic]||{};
+  const groups={};
+  for(const key of Object.keys(CAMPAIGN_GROUP_WEIGHTS))groups[key]=Number(clampNumber(base+current+Number(shifts[key]||0)+crypto.randomInt(-5,6),5,95).toFixed(1));
+  return groups;
+}
+
 function assessPolicy(order, state) {
   const text = String(order || "").toLowerCase();
   const gdp = clampNumber(state.gdp || 350, 1, 100000000);
@@ -480,6 +543,175 @@ async function main(req,res,forcedPath) {
       } finally {
         client.release();
       }
+    }
+
+    if (path === "/api/presidential/game/constitution/propose" && req.method === "POST") {
+      if(!gameUser)return out(res,401,{error:"authentication_required"});
+      const input=await readBody(req),articleId=txt(input.articleId,40),proposedText=txt(input.proposedText,2500),reason=txt(input.reason,1200);
+      if(!DEFAULT_CONSTITUTION_ARTICLES.some(item=>item.id===articleId))return out(res,400,{error:"invalid_constitution_article"});
+      if(proposedText.length<30||reason.length<20)return out(res,400,{error:"amendment_text_and_reason_required"});
+      const client=await presidentialPool.connect();
+      try{
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
+        const game=saved.rows[0],state=ensureInstitutionalState({...game.state});
+        if(state.phase&&state.phase!=="government"){await client.query("ROLLBACK");return out(res,409,{error:"government_phase_required"});}
+        if(state.actionPoints<1){await client.query("ROLLBACK");return out(res,409,{error:"no_action_points"});}
+        if(state.constitution.proposals.some(item=>["public_consultation","referendum_scheduled"].includes(item.status))){await client.query("ROLLBACK");return out(res,409,{error:"another_amendment_in_progress"});}
+        const cost=Number((Math.max(1,Number(state.gdp||350))*0.00008).toFixed(3));
+        if(Number(state.treasury||0)<cost){await client.query("ROLLBACK");return out(res,409,{error:"insufficient_treasury",required:cost,available:state.treasury});}
+        const template=DEFAULT_CONSTITUTION_ARTICLES.find(item=>item.id===articleId);
+        const currentArticle=state.constitution.articles.find(item=>item.id===articleId)||template;
+        const groups=makeConstitutionalOpinion(state,articleId);
+        const proposal={
+          id:crypto.randomUUID(),articleId,articleTitle:currentArticle.title,oldText:currentArticle.text,
+          proposedText,reason,status:"public_consultation",createdAt:String(game.game_date).slice(0,10),
+          submittedTurn:Number(game.turn_number||0),consultationEndsTurn:Number(game.turn_number||0)+2,
+          publicOpinion:groups,publicSupport:Number(opinionScore(groups).toFixed(1)),filingCost:cost
+        };
+        state.constitution.proposals.push(proposal);
+        state.actionPoints-=1;state.treasury=Number((Number(state.treasury||0)-cost).toFixed(3));
+        state.budgetBalance=Number((Number(state.budgetBalance||0)-cost).toFixed(3));
+        await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",[JSON.stringify(state),game.id]);
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'constitutional_amendment',$3,$4,1,$5::jsonb)",[game.id,game.game_date,"Зарегистрирована конституционная поправка: "+currentArticle.title,"Предлагаемая редакция направлена на двухмесячное общественное обсуждение. Затем потребуется квалифицированное большинство парламента и общенациональный референдум.",JSON.stringify({proposalId:proposal.id,articleId,consultationEndsTurn:proposal.consultationEndsTurn,filingCost:cost})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'constitution_amendment_proposed',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({proposalId:proposal.id,articleId,consultationEndsTurn:proposal.consultationEndsTurn})]);
+        await client.query("COMMIT");
+        return out(res,201,{ok:true,proposal,state});
+      }catch(error){await client.query("ROLLBACK");throw error;}
+      finally{client.release();}
+    }
+
+    if (path === "/api/presidential/game/constitution/parliament" && req.method === "POST") {
+      if(!gameUser)return out(res,401,{error:"authentication_required"});
+      const client=await presidentialPool.connect();
+      try{
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
+        const game=saved.rows[0],state=ensureInstitutionalState({...game.state});
+        if(state.phase&&state.phase!=="government"){await client.query("ROLLBACK");return out(res,409,{error:"government_phase_required"});}
+        if(state.actionPoints<1){await client.query("ROLLBACK");return out(res,409,{error:"no_action_points"});}
+        const proposal=[...state.constitution.proposals].reverse().find(item=>item.status==="public_consultation");
+        if(!proposal){await client.query("ROLLBACK");return out(res,409,{error:"no_amendment_awaiting_parliament"});}
+        if(Number(game.turn_number||0)<Number(proposal.consultationEndsTurn||999999)){await client.query("ROLLBACK");return out(res,409,{error:"public_consultation_not_finished",availableAtTurn:proposal.consultationEndsTurn});}
+        const seats=Number(state.parliament.governmentSeats||50),publicSupport=Number(proposal.publicSupport||opinionScore(proposal.publicOpinion||{}));
+        const yesShare=Number(clampNumber(seats+(publicSupport-50)*0.32+(Number(state.approval||50)-50)*0.08+crypto.randomInt(-4,5),5,95).toFixed(1));
+        proposal.parliamentShare=yesShare;proposal.parliamentTurn=Number(game.turn_number||0);
+        proposal.parliamentPassed=yesShare>=66.7;
+        if(proposal.parliamentPassed){proposal.status="referendum_scheduled";proposal.referendumTurn=Number(game.turn_number||0)+2;}
+        else proposal.status="parliamentary_rejected";
+        state.actionPoints-=1;state.parliament.lastVote={proposalId:proposal.id,yesShare,required:66.7,turn:Number(game.turn_number||0)};
+        await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",[JSON.stringify(state),game.id]);
+        const headline=proposal.parliamentPassed?"Парламент одобрил конституционную поправку":"Парламент отклонил конституционную поправку";
+        const article="За поправку проголосовали "+yesShare+"% депутатов. Для передачи на обязательный референдум требовалось не менее 66,7%.";
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'constitutional_vote',$3,$4,$5,$6::jsonb)",[game.id,game.game_date,headline,article,proposal.parliamentPassed?1:2,JSON.stringify({proposalId:proposal.id,yesShare,required:66.7,referendumTurn:proposal.referendumTurn||null})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'constitution_parliament_vote',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({proposalId:proposal.id,yesShare,passed:proposal.parliamentPassed})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,approved:proposal.parliamentPassed,yesShare,required:66.7,proposal});
+      }catch(error){await client.query("ROLLBACK");throw error;}
+      finally{client.release();}
+    }
+
+    if (path === "/api/presidential/game/constitution/referendum" && req.method === "POST") {
+      if(!gameUser)return out(res,401,{error:"authentication_required"});
+      const client=await presidentialPool.connect();
+      try{
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
+        const game=saved.rows[0],state=ensureInstitutionalState({...game.state});
+        if(state.phase&&state.phase!=="government"){await client.query("ROLLBACK");return out(res,409,{error:"government_phase_required"});}
+        if(state.actionPoints<1){await client.query("ROLLBACK");return out(res,409,{error:"no_action_points"});}
+        const proposal=[...state.constitution.proposals].reverse().find(item=>item.status==="referendum_scheduled");
+        if(!proposal){await client.query("ROLLBACK");return out(res,409,{error:"no_constitutional_referendum_scheduled"});}
+        if(Number(game.turn_number||0)<Number(proposal.referendumTurn||999999)){await client.query("ROLLBACK");return out(res,409,{error:"referendum_not_scheduled_yet",availableAtTurn:proposal.referendumTurn});}
+        const yesShare=Number(clampNumber(opinionScore(proposal.publicOpinion||{})+crypto.randomInt(-6,7),5,95).toFixed(1));
+        const turnout=Number(clampNumber(42+Number(state.stability||50)*0.18+Number(state.democracyIndex||50)*0.15-Number(state.corruption||30)*0.06+crypto.randomInt(-6,7),30,92).toFixed(1));
+        const approved=turnout>=40&&yesShare>=50;
+        proposal.referendumShare=yesShare;proposal.turnout=turnout;proposal.referendumDate=String(game.game_date).slice(0,10);
+        proposal.status=approved?"approved":"referendum_rejected";
+        if(approved){
+          const article=state.constitution.articles.find(item=>item.id===proposal.articleId);
+          if(article)article.text=proposal.proposedText;
+          state.constitution.version=Number(state.constitution.version||1)+1;
+          state.constitution.history.push({proposalId:proposal.id,articleId:proposal.articleId,articleTitle:proposal.articleTitle,oldText:proposal.oldText,newText:proposal.proposedText,referendumShare:yesShare,turnout,approvedAt:proposal.referendumDate,version:state.constitution.version});
+          state.democracyIndex=clampNumber(Number(state.democracyIndex||50)+1.2,0,100);
+          state.approval=clampNumber(Number(state.approval||50)+0.6,0,100);
+        }
+        state.actionPoints-=1;
+        await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",[JSON.stringify(state),game.id]);
+        const headline=approved?"Новая редакция Конституции одобрена референдумом":"Конституционная поправка не получила одобрения";
+        const articleText="Явка составила "+turnout+"%. За поправку проголосовали "+yesShare+"% участников. "+(approved?"Поправка вступила в силу.":"Действующая редакция Конституции сохранена.");
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'constitutional_referendum',$3,$4,$5,$6::jsonb)",[game.id,game.game_date,headline,articleText,approved?1:2,JSON.stringify({proposalId:proposal.id,yesShare,turnout,approved})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'constitution_referendum_result',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({proposalId:proposal.id,yesShare,turnout,approved})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,approved,yesShare,turnout,proposal,constitution:state.constitution});
+      }catch(error){await client.query("ROLLBACK");throw error;}
+      finally{client.release();}
+    }
+
+    if (path === "/api/presidential/game/referendum/propose" && req.method === "POST") {
+      if(!gameUser)return out(res,401,{error:"authentication_required"});
+      const input=await readBody(req),question=txt(input.question,500),topic=txt(input.topic,24);
+      const yesLabel=txt(input.yesLabel,100)||"Да",noLabel=txt(input.noLabel,100)||"Нет";
+      if(question.length<20)return out(res,400,{error:"referendum_question_too_short"});
+      if(!["economy","social","institutions","security","regions","general"].includes(topic))return out(res,400,{error:"invalid_referendum_topic"});
+      const client=await presidentialPool.connect();
+      try{
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
+        const game=saved.rows[0],state=ensureInstitutionalState({...game.state});
+        if(state.phase&&state.phase!=="government"){await client.query("ROLLBACK");return out(res,409,{error:"government_phase_required"});}
+        if(state.actionPoints<1){await client.query("ROLLBACK");return out(res,409,{error:"no_action_points"});}
+        if(state.referendums.some(item=>item.status==="campaign")){await client.query("ROLLBACK");return out(res,409,{error:"referendum_already_in_campaign"});}
+        const cost=Number((Math.max(1,Number(state.gdp||350))*0.00005).toFixed(3));
+        if(Number(state.treasury||0)<cost){await client.query("ROLLBACK");return out(res,409,{error:"insufficient_treasury",required:cost,available:state.treasury});}
+        const voterGroups=makeReferendumOpinion(state,topic),voteTurn=Number(game.turn_number||0)+2;
+        const referendum={id:crypto.randomUUID(),question,topic,yesLabel,noLabel,status:"campaign",createdAt:String(game.game_date).slice(0,10),openedTurn:Number(game.turn_number||0),voteTurn,voterGroups,initialYesShare:Number(opinionScore(voterGroups).toFixed(1)),filingCost:cost};
+        state.referendums.push(referendum);state.actionPoints-=1;
+        state.treasury=Number((Number(state.treasury||0)-cost).toFixed(3));
+        state.budgetBalance=Number((Number(state.budgetBalance||0)-cost).toFixed(3));
+        await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",[JSON.stringify(state),game.id]);
+        const article="Вопрос зарегистрирован для общенационального голосования. До голосования пройдут два месяца общественной кампании и разъяснения позиций.";
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'referendum_campaign',$3,$4,1,$5::jsonb)",[game.id,game.game_date,"Назначена кампания референдума",question,JSON.stringify({referendumId:referendum.id,voteTurn,topic,filingCost:cost})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'referendum_proposed',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({referendumId:referendum.id,topic,voteTurn})]);
+        await client.query("COMMIT");
+        return out(res,201,{ok:true,referendum,state});
+      }catch(error){await client.query("ROLLBACK");throw error;}
+      finally{client.release();}
+    }
+
+    if (path === "/api/presidential/game/referendum/hold" && req.method === "POST") {
+      if(!gameUser)return out(res,401,{error:"authentication_required"});
+      const client=await presidentialPool.connect();
+      try{
+        await client.query("BEGIN");
+        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
+        if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
+        const game=saved.rows[0],state=ensureInstitutionalState({...game.state});
+        if(state.phase&&state.phase!=="government"){await client.query("ROLLBACK");return out(res,409,{error:"government_phase_required"});}
+        if(state.actionPoints<1){await client.query("ROLLBACK");return out(res,409,{error:"no_action_points"});}
+        const referendum=[...state.referendums].reverse().find(item=>item.status==="campaign");
+        if(!referendum){await client.query("ROLLBACK");return out(res,409,{error:"no_referendum_awaiting_vote"});}
+        if(Number(game.turn_number||0)<Number(referendum.voteTurn||999999)){await client.query("ROLLBACK");return out(res,409,{error:"referendum_campaign_not_finished",availableAtTurn:referendum.voteTurn});}
+        const yesShare=Number(clampNumber(opinionScore(referendum.voterGroups||{})+crypto.randomInt(-5,6),1,99).toFixed(1));
+        const turnout=Number(clampNumber(40+Number(state.stability||50)*0.2+Number(state.democracyIndex||50)*0.13-Number(state.corruption||30)*0.05+crypto.randomInt(-6,7),30,92).toFixed(1));
+        const approved=turnout>=40&&yesShare>=50;
+        referendum.yesShare=yesShare;referendum.turnout=turnout;referendum.resultDate=String(game.game_date).slice(0,10);
+        referendum.status=turnout<40?"invalid":approved?"approved":"referendum_rejected";
+        state.actionPoints-=1;
+        if(turnout>=40)state.approval=clampNumber(Number(state.approval||50)+(approved?0.7:-0.5),0,100);
+        await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",[JSON.stringify(state),game.id]);
+        const headline=turnout<40?"Референдум признан несостоявшимся":approved?"Предложение одобрено общенациональным референдумом":"Предложение отклонено общенациональным референдумом";
+        const article="Явка составила "+turnout+"%. Вариант «"+referendum.yesLabel+"» поддержали "+yesShare+"% участников. "+(turnout<40?"Не достигнут установленный кворум.":approved?"Предложение получило большинство голосов.":"Большинство участников проголосовало против предложения.");
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'referendum_result',$3,$4,$5,$6::jsonb)",[game.id,game.game_date,headline,article,turnout<40?2:approved?1:2,JSON.stringify({referendumId:referendum.id,yesShare,turnout,approved})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'referendum_result',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({referendumId:referendum.id,yesShare,turnout,approved})]);
+        await client.query("COMMIT");
+        return out(res,200,{ok:true,approved,yesShare,turnout,referendum});
+      }catch(error){await client.query("ROLLBACK");throw error;}
+      finally{client.release();}
     }
 
     if (path === "/api/presidential/game/current" && req.method === "GET") {
