@@ -5,6 +5,13 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL && !/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? { rejectUnauthorized: true } : undefined,
   max: 5, idleTimeoutMillis: 10000, connectionTimeoutMillis: 5000
 });
+const GAME_ORIGIN = process.env.PRESIDENTIAL_GAME_ORIGIN || "https://merekwi.github.io";
+const presidentialPool = process.env.PRESIDENTIAL_DATABASE_URL ? new Pool({
+  connectionString: process.env.PRESIDENTIAL_DATABASE_URL,
+  ssl: { rejectUnauthorized: true },
+  max: 4, idleTimeoutMillis: 10000, connectionTimeoutMillis: 8000
+}) : null;
+const digest = value => crypto.createHash("sha256").update(String(value)).digest("hex");
 const COOKIE = "nettle_session", TTL = 604800;
 function out(res, status, data) {
   res.statusCode = status;
@@ -14,11 +21,11 @@ function out(res, status, data) {
 }
 function setCors(req, res) {
   const origin = req.headers.origin;
-  const allowed = process.env.SITE_ORIGIN;
-  if (origin && allowed && origin === allowed) {
-    res.setHeader("Access-Control-Allow-Origin", allowed);
+  const allowed = [process.env.SITE_ORIGIN, GAME_ORIGIN].filter(Boolean);
+  if (origin && allowed.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
     res.setHeader("Vary", "Origin");
   }
@@ -83,8 +90,158 @@ async function main(req,res,forcedPath) {
   const path = forcedPath || (new URL(req.url,"https://localhost").pathname.replace(/\/+$/,"") || "/");
   setCors(req,res);
   if (req.method === "OPTIONS") {
-    if (!req.headers.origin || req.headers.origin !== process.env.SITE_ORIGIN) return out(res,403,{error:"origin_check_failed"});
+    const origins = path.startsWith("/api/presidential/") ? [process.env.SITE_ORIGIN, GAME_ORIGIN] : [process.env.SITE_ORIGIN];
+    if (!req.headers.origin || !origins.includes(req.headers.origin)) return out(res,403,{error:"origin_check_failed"});
     res.statusCode=204; res.setHeader("Allow","GET, POST, PATCH, OPTIONS"); return res.end();
+  }
+
+  // Presidential Simulator endpoints reuse the Telegram bot already connected to Nettle Group.
+  // The login widget runs on SITE_ORIGIN; the game itself calls this API from GAME_ORIGIN.
+  if (path.startsWith("/api/presidential/")) {
+    if (!presidentialPool) return out(res,503,{error:"presidential_database_not_configured"});
+    const loginRoute = path === "/api/presidential/auth/telegram";
+    const expectedOrigin = loginRoute ? process.env.SITE_ORIGIN : GAME_ORIGIN;
+    if (!expectedOrigin || req.headers.origin !== expectedOrigin) return out(res,403,{error:"origin_check_failed"});
+
+    if (loginRoute && req.method === "POST") {
+      const payload = await readBody(req);
+      const state = txt(payload.state,128);
+      const telegramData = { ...payload };
+      delete telegramData.state;
+      const identity = verifyTelegram(telegramData);
+      if (!/^[A-Za-z0-9_-]{40,128}$/.test(state)) return out(res,400,{error:"invalid_login_state"});
+      if (!identity) return out(res,401,{error:"telegram_signature_invalid_or_expired"});
+      const code = crypto.randomBytes(32).toString("hex");
+      await presidentialPool.query(
+        "INSERT INTO telegram_login_codes(code_hash,state_hash,telegram_id,telegram_username,first_name,expires_at) VALUES($1,$2,$3,$4,$5,now()+interval '3 minutes')",
+        [digest(code),digest(state),identity.id,identity.username,identity.name]
+      );
+      await presidentialPool.query("DELETE FROM telegram_login_codes WHERE expires_at < now()-interval '1 day'");
+      return out(res,200,{ok:true,code,expiresIn:180});
+    }
+
+    if (path === "/api/presidential/auth/exchange" && req.method === "POST") {
+      const payload = await readBody(req);
+      const code = txt(payload.code,64), state = txt(payload.state,128);
+      if (!/^[a-f0-9]{64}$/i.test(code) || !/^[A-Za-z0-9_-]{40,128}$/.test(state)) return out(res,400,{error:"invalid_login_code"});
+      const client = await presidentialPool.connect();
+      const token = crypto.randomBytes(32).toString("hex");
+      try {
+        await client.query("BEGIN");
+        const redeemed = await client.query(
+          "UPDATE telegram_login_codes SET consumed_at=now() WHERE code_hash=$1 AND state_hash=$2 AND consumed_at IS NULL AND expires_at>now() RETURNING telegram_id::text,telegram_username,first_name",
+          [digest(code),digest(state)]
+        );
+        if (!redeemed.rowCount) {
+          await client.query("ROLLBACK");
+          return out(res,401,{error:"login_code_expired_or_used"});
+        }
+        const identity = redeemed.rows[0];
+        const userResult = await client.query(
+          "INSERT INTO game_users(telegram_id,telegram_username,first_name,last_login_at,updated_at) VALUES($1,$2,$3,now(),now()) ON CONFLICT(telegram_id) DO UPDATE SET telegram_username=EXCLUDED.telegram_username,first_name=EXCLUDED.first_name,last_login_at=now(),updated_at=now() RETURNING id,telegram_id::text,telegram_username,first_name",
+          [identity.telegram_id,identity.telegram_username,identity.first_name]
+        );
+        const user = userResult.rows[0];
+        await client.query(
+          "INSERT INTO game_sessions(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval '7 days')",
+          [user.id,digest(token)]
+        );
+        await client.query("COMMIT");
+        return out(res,200,{token,expiresIn:604800,user:{id:user.id,telegramId:user.telegram_id,username:user.telegram_username,firstName:user.first_name}});
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const bearerMatch = /^Bearer ([a-f0-9]{64})$/i.exec(String(req.headers.authorization || ""));
+    const bearer = bearerMatch ? bearerMatch[1] : null;
+    const gameUser = bearer ? (await presidentialPool.query(
+      "SELECT u.id,u.telegram_id::text,u.telegram_username,u.first_name FROM game_sessions s JOIN game_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()",
+      [digest(bearer)]
+    )).rows[0] : null;
+
+    if (path === "/api/presidential/me" && req.method === "GET") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      return out(res,200,{authenticated:true,user:{id:gameUser.id,telegramId:gameUser.telegram_id,username:gameUser.telegram_username,firstName:gameUser.first_name}});
+    }
+
+    if (path === "/api/presidential/auth/logout" && req.method === "POST") {
+      if (!bearer) return out(res,401,{error:"authentication_required"});
+      await presidentialPool.query("DELETE FROM game_sessions WHERE token_hash=$1",[digest(bearer)]);
+      return out(res,200,{ok:true});
+    }
+
+    if (path === "/api/presidential/game/current" && req.method === "GET") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const result = await presidentialPool.query(
+        "SELECT s.id,s.save_name,s.president_name,s.president_age,s.president_bio,s.game_date,s.turn_number,s.state,s.status,c.iso2,c.name_en,c.name_local,c.flag_emoji,c.government_type,c.region FROM game_saves s LEFT JOIN countries c ON c.id=s.country_id WHERE s.owner_user_id=$1 AND s.status='active' ORDER BY s.updated_at DESC LIMIT 1",
+        [gameUser.telegram_id]
+      );
+      return out(res,200,{game:result.rows[0] || null});
+    }
+
+    if (path === "/api/presidential/game/new" && req.method === "POST") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const countryResult = await presidentialPool.query("SELECT * FROM countries WHERE iso2 IS NOT NULL ORDER BY random() LIMIT 1");
+      if (!countryResult.rowCount) return out(res,503,{error:"country_catalog_empty"});
+      const country = countryResult.rows[0];
+      const baseline = country.baseline_state || {};
+      const firstNames = ["Александр","Даниэль","Маркос","Эмиль","София","Михаил","Адриан","Лука","Елена","Николай","Томас","Амелия"];
+      const lastNames = ["Новский","Петров","Альварес","ван дер Берг","Марин","Ковач","Морено","Сантос","Иванов","Шмидт","Коваль","Ромеро"];
+      const president = firstNames[crypto.randomInt(firstNames.length)]+" "+lastNames[crypto.randomInt(lastNames.length)];
+      const age = crypto.randomInt(35,66);
+      const state = {
+        gdp: Number(baseline.gdp || 350),
+        gdpGrowth: Number(baseline.gdpGrowth || 2.1),
+        inflation: Number(baseline.inflation || 3.2),
+        unemployment: Number(baseline.unemployment || 5.4),
+        approval: crypto.randomInt(46,62),
+        stability: crypto.randomInt(62,79),
+        budgetBalance: Number(baseline.budgetBalance || 0),
+        treasury: Number(baseline.treasury || 30),
+        population: Number(baseline.population || 25),
+        militaryPower: Number(baseline.militaryPower || 48),
+        publicServices: 58,
+        corruption: 34,
+        debt: Number(baseline.debt || 55),
+        taxRate: Number(baseline.taxRate || 22)
+      };
+      const client = await presidentialPool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("UPDATE game_saves SET status='finished',updated_at=now() WHERE owner_user_id=$1 AND status='active'",[gameUser.telegram_id]);
+        const saveResult = await client.query(
+          "INSERT INTO game_saves(owner_user_id,save_name,country_id,president_name,president_age,president_bio,game_date,turn_number,state,status) VALUES($1,$2,$3,$4,$5,$6,'2026-01-01',1,$7::jsonb,'active') RETURNING id,save_name,president_name,president_age,president_bio,game_date,turn_number,state,status",
+          [gameUser.telegram_id,country.name_local || country.name_en,country.id,president,age,"Глава государства. Политическая карьера началась до избрания.",JSON.stringify(state)]
+        );
+        const save = saveResult.rows[0];
+        const ministerNames = ["Ирина Волкова","Андрей Коваль","Мария Новак","Дмитрий Соколов","Лаура Мартинес"];
+        const portfolios = ["Финансы","Иностранные дела","Оборона","Экономика","Здравоохранение"];
+        for (let i=0;i<portfolios.length;i++) {
+          await client.query("INSERT INTO ministers(save_id,portfolio,full_name,age,competence,loyalty,approval,traits) VALUES($1,$2,$3,$4,$5,$6,$7,'[]'::jsonb)",[save.id,portfolios[i],ministerNames[i],crypto.randomInt(38,61),crypto.randomInt(48,86),crypto.randomInt(45,88),crypto.randomInt(42,72)]);
+        }
+        const neighbours = await client.query("SELECT name_local,name_en FROM countries WHERE id<>$1 ORDER BY random() LIMIT 4",[country.id]);
+        for (const n of neighbours.rows) {
+          await client.query("INSERT INTO diplomatic_relations(save_id,other_country_name,relation_score,status,treaties) VALUES($1,$2,$3,'neutral','[]'::jsonb)",[save.id,n.name_local || n.name_en,crypto.randomInt(-18,32)]);
+        }
+        for (const unit of [["Сухопутные войска",42000],["Военно-воздушные силы",170],["Военно-морские силы",24],["Национальная гвардия",12000]]) {
+          await client.query("INSERT INTO military_units(save_id,unit_type,quantity,readiness,supply) VALUES($1,$2,$3,$4,$5)",[save.id,unit[0],unit[1],crypto.randomInt(55,84),crypto.randomInt(58,90)]);
+        }
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,'2026-01-01','inauguration',$2,$3,2,'{}'::jsonb)",[save.id,"Новый президент вступил в должность","В стране состоялась церемония вступления нового главы государства. Правительство приступает к формированию политической программы."]);
+        await client.query("COMMIT");
+        return out(res,201,{game:{...save,iso2:country.iso2,name_en:country.name_en,name_local:country.name_local,flag_emoji:country.flag_emoji,government_type:country.government_type,region:country.region}});
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    return out(res,404,{error:"not_found"});
   }
   if (path === "/api/auth/telegram" && req.method === "POST") {
     if (!sameOrigin(req)) return out(res,403,{error:"origin_check_failed"});
