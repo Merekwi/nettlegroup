@@ -1,0 +1,50 @@
+name: Bundle Nettle Neon Function
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "neon-function/api-handler.cjs"
+      - "neon-function/package.json"
+      - ".github/workflows/bundle-neon-function.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install runtime dependencies and bundler
+        working-directory: neon-function
+        run: npm install --no-save --package-lock=false esbuild
+
+      - name: Bundle API with its dependencies
+        working-directory: neon-function
+        run: |
+          ./node_modules/.bin/esbuild api-handler.cjs --bundle --platform=node --format=cjs --target=node24 --outfile=api-handler.bundle.cjs
+          node --check api-handler.bundle.cjs
+          test -s api-handler.bundle.cjs
+
+      - name: Commit generated bundle
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add neon-function/api-handler.bundle.cjs
+          if git diff --cached --quiet; then
+            echo "Bundle is already up to date."
+          else
+            git commit -m "Build bundled Nettle Neon Function"
+            git push
+          fi
