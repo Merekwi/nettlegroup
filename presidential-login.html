@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#172235">
+<meta name="referrer" content="no-referrer">
+<title>Вход в Presidential Simulator · Nettle Group</title>
+<style>
+:root{color-scheme:light}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f2f4f8;color:#172235;font:15px/1.6 Inter,system-ui,sans-serif}.card{width:min(100%,520px);padding:36px;border:1px solid #dce2eb;border-radius:24px;background:#fff;box-shadow:0 22px 70px #16233a12}.brand{font-size:11px;font-weight:800;letter-spacing:.18em;color:#718097}.brand b{color:#1e5ba4}.seal{width:54px;height:54px;display:grid;place-items:center;margin:22px 0;border-radius:17px;background:#eaf1fb;color:#255c9d;font-size:26px}h1{margin:0 0 8px;font-size:28px;letter-spacing:-.04em}p{margin:0;color:#68758a}.slot{min-height:56px;display:flex;align-items:center;margin:24px 0 12px}.status{min-height:44px;font-size:13px;color:#6d7787}.status.error{color:#b33a37}.hint{border-top:1px solid #edf0f4;margin-top:18px;padding-top:16px;font-size:12px;color:#8792a2}.button{display:inline-block;padding:12px 18px;background:#1c4e86;color:#fff;border-radius:10px;text-decoration:none;font-weight:700}
+</style>
+</head>
+<body>
+<main class="card">
+<div class="brand">NETTLE <b>GROUP</b> · AUTH GATEWAY</div>
+<div class="seal">♙</div>
+<h1>Вход в Presidential Simulator</h1>
+<p>Подтвердите вход через Telegram. Используется знакомый бот @Verify_NettleBOT — создавать новый аккаунт бота не требуется.</p>
+<div id="widget" class="slot"></div>
+<div id="status" class="status">Проверяем параметры безопасного входа…</div>
+<div class="hint">Telegram передаёт подтверждённые данные профиля. Код входа одноразовый, действует 3 минуты и привязан к этому окну авторизации.</div>
+</main>
+<script>
+(() => {
+  "use strict";
+  const API = "https://br-little-union-b9iipjfz-nettleapi.compute.c-7.eu-central-1.aws.neon.tech";
+  const GAME = "https://merekwi.github.io/presedento-sim/";
+  const status = document.getElementById("status");
+  const setStatus = (message, error = false) => { status.textContent = message; status.classList.toggle("error", error); };
+  const state = new URLSearchParams(location.search).get("state") || "";
+  if (!/^[A-Za-z0-9_-]{40,128}$/.test(state)) {
+    setStatus("Ссылка входа недействительна или устарела. Вернитесь в игру и начните вход заново.", true);
+    return;
+  }
+  let busy = false;
+  window.onTelegramAuth = async function(user) {
+    if (busy) return;
+    busy = true;
+    setStatus("Проверяем подпись Telegram и создаём одноразовый код…");
+    try {
+      const response = await fetch(API + "/api/presidential/auth/telegram", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...user, state })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.code) throw new Error(data.error || "Не удалось подтвердить Telegram.");
+      setStatus("Вход подтверждён. Возвращаемся в игру…");
+      const target = new URL(GAME);
+      target.hash = new URLSearchParams({ ps_login_code: data.code, ps_state: state }).toString();
+      location.replace(target.toString());
+    } catch (error) {
+      busy = false;
+      setStatus("Ошибка входа: " + error.message, true);
+    }
+  };
+  const script = document.createElement("script");
+  script.src = "https://telegram.org/js/telegram-widget.js?22";
+  script.async = true;
+  script.setAttribute("data-telegram-login", "Verify_NettleBOT");
+  script.setAttribute("data-size", "large");
+  script.setAttribute("data-userpic", "false");
+  script.setAttribute("data-request-access", "write");
+  script.setAttribute("data-onauth", "onTelegramAuth(user)");
+  document.getElementById("widget").appendChild(script);
+  setStatus("Нажмите кнопку Telegram ниже, чтобы продолжить.");
+})();
+</script>
+</body>
+</html>
