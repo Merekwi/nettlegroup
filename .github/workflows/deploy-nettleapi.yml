@@ -66,6 +66,12 @@ jobs:
           sudo install -m 0755 /tmp/neon /usr/local/bin/neon
           neon --version
 
+      - name: Install esbuild required by Neon Functions
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global esbuild
+          echo "NEON_ESBUILD_PATH=$(command -v esbuild)" >> "$GITHUB_ENV"
       - name: Deploy the API Function directly
         shell: bash
         run: |
