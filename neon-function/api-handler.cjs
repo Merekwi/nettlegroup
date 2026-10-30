@@ -267,6 +267,14 @@ async function main(req,res,forcedPath) {
       return out(res,200,{ok:true});
     }
 
+    if (path === "/api/presidential/game/setup" && req.method === "GET") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const countries = await presidentialPool.query(
+        "SELECT id,iso2,name_en,name_local,flag_emoji,government_type,region,baseline_state FROM countries WHERE iso2 IS NOT NULL ORDER BY name_local NULLS LAST,name_en"
+      );
+      return out(res,200,{countries:countries.rows});
+    }
+
     if (path === "/api/presidential/game/current" && req.method === "GET") {
       if (!gameUser) return out(res,401,{error:"authentication_required"});
       const result = await presidentialPool.query(
@@ -537,56 +545,129 @@ async function main(req,res,forcedPath) {
 
     if (path === "/api/presidential/game/new" && req.method === "POST") {
       if (!gameUser) return out(res,401,{error:"authentication_required"});
-      const countryResult = await presidentialPool.query("SELECT * FROM countries WHERE iso2 IS NOT NULL ORDER BY random() LIMIT 1");
-      if (!countryResult.rowCount) return out(res,503,{error:"country_catalog_empty"});
+      const input = await readBody(req);
+      const countryId = Number(input.countryId);
+      const president = txt(input.presidentName,100);
+      const age = Number(input.presidentAge);
+      const course = txt(input.politicalCourse,40);
+      const difficulty = txt(input.difficulty,20);
+      const startYear = Number(input.startYear);
+      const portraitId = txt(input.portraitId,4);
+      const courseOptions = {
+        social_democracy:{label:"Социальная демократия",effects:{publicServices:7,education:4,healthcare:5,gdpGrowth:-0.1,approval:2,treasury:-2}},
+        market_liberal:{label:"Рыночный либерализм",effects:{gdpGrowth:0.7,taxRate:-2,unemployment:-0.3,approval:1,publicServices:-2,stability:-1}},
+        conservative:{label:"Консервативный курс",effects:{stability:6,militaryPower:5,taxRate:1,approval:1}},
+        green_transition:{label:"Зелёная модернизация",effects:{infrastructure:4,healthcare:2,gdpGrowth:-0.2,corruption:-1}},
+        industrial:{label:"Промышленное развитие",effects:{gdpGrowth:0.6,infrastructure:5,militaryPower:2,treasury:-3}}
+      };
+      const difficultyOptions = {
+        easy:{label:"Облегчённая",treasury:1.25,approval:8,stability:7,debt:-5},
+        normal:{label:"Стандартная",treasury:1,approval:0,stability:0,debt:0},
+        hard:{label:"Сложная",treasury:0.72,approval:-9,stability:-12,debt:12}
+      };
+      if (!Number.isSafeInteger(countryId) || president.length < 3 || !Number.isInteger(age) || age < 25 || age > 90 ||
+          !courseOptions[course] || !difficultyOptions[difficulty] || !Number.isInteger(startYear) || startYear < 2026 || startYear > 2030 ||
+          !/^p(0[1-9]|1[0-6])$/.test(portraitId)) {
+        return out(res,400,{error:"invalid_campaign_setup"});
+      }
+      const countryResult = await presidentialPool.query("SELECT * FROM countries WHERE id=$1 AND iso2 IS NOT NULL",[countryId]);
+      if (!countryResult.rowCount) return out(res,404,{error:"country_not_found"});
       const country = countryResult.rows[0];
       const baseline = country.baseline_state || {};
-      const firstNames = ["Александр","Даниэль","Маркос","Эмиль","София","Михаил","Адриан","Лука","Елена","Николай","Томас","Амелия"];
-      const lastNames = ["Новский","Петров","Альварес","ван дер Берг","Марин","Ковач","Морено","Сантос","Иванов","Шмидт","Коваль","Ромеро"];
-      const president = firstNames[crypto.randomInt(firstNames.length)]+" "+lastNames[crypto.randomInt(lastNames.length)];
-      const age = crypto.randomInt(35,66);
+      const base = (key,fallback) => Number.isFinite(Number(baseline[key])) ? Number(baseline[key]) : fallback;
       const state = {
-        gdp: Number(baseline.gdp || 350),
-        gdpGrowth: Number(baseline.gdpGrowth || 2.1),
-        inflation: Number(baseline.inflation || 3.2),
-        unemployment: Number(baseline.unemployment || 5.4),
-        approval: crypto.randomInt(46,62),
-        stability: crypto.randomInt(62,79),
-        budgetBalance: Number(baseline.budgetBalance || 0),
-        treasury: Number(baseline.treasury || 30),
-        population: Number(baseline.population || 25),
-        militaryPower: Number(baseline.militaryPower || 48),
-        publicServices: 58,
-        corruption: 34,
-        debt: Number(baseline.debt || 55),
-        taxRate: Number(baseline.taxRate || 22),
-        education: Number(baseline.education || 55),
-        healthcare: Number(baseline.healthcare || 58),
-        infrastructure: Number(baseline.infrastructure || 52),
-        actionPoints: 2
+        gdp:base("gdp",350),gdpGrowth:base("gdpGrowth",2.1),inflation:base("inflation",3.2),
+        unemployment:base("unemployment",5.4),approval:base("approval",54),stability:base("stability",65),
+        budgetBalance:base("budgetBalance",0),treasury:base("treasury",30),population:base("population",25),
+        militaryPower:base("militaryPower",48),publicServices:base("publicServices",55),corruption:base("corruption",34),
+        debt:base("debt",55),taxRate:base("taxRate",22),education:base("education",55),
+        healthcare:base("healthcare",58),infrastructure:base("infrastructure",52),actionPoints:2,
+        politicalCourse:course,difficulty:difficulty,presidentPortrait:portraitId,startYear:startYear
       };
+      const effectBounds = key => key==="gdpGrowth"?[-20,30]:key==="inflation"?[0,200]:key==="unemployment"?[0,60]:key==="taxRate"?[0,70]:[0,100];
+      for (const [key,value] of Object.entries(courseOptions[course].effects)) {
+        const bounds = effectBounds(key);
+        state[key] = Number(clampNumber(Number(state[key] || 0) + value,bounds[0],bounds[1]).toFixed(2));
+      }
+      const difficultyRule = difficultyOptions[difficulty];
+      state.treasury = Number((state.treasury * difficultyRule.treasury).toFixed(2));
+      state.approval = Number(clampNumber(state.approval + difficultyRule.approval,0,100).toFixed(2));
+      state.stability = Number(clampNumber(state.stability + difficultyRule.stability,0,100).toFixed(2));
+      state.debt = Number(clampNumber(state.debt + difficultyRule.debt,0,500).toFixed(2));
+      const campaignTitle = txt(input.campaignTitle,90) || country.name_local || country.name_en;
+      const bio = "Глава государства. Политический курс: " + courseOptions[course].label + ". Сложность: " + difficultyRule.label + ".";
+      const yearDate = String(startYear) + "-01-01";
+      const cabinetPools = {
+        AR:["Lucía Fernández","Mateo González","Valentina Rodríguez","Santiago López","Camila Martínez"],
+        AU:["Olivia Williams","Jack Thompson","Charlotte Wilson","Noah Harris","Amelia Martin"],
+        BR:["Mariana Oliveira","Gabriel Souza","Beatriz Costa","Lucas Pereira","Isabela Santos"],
+        CA:["Émilie Tremblay","Liam Anderson","Ava Campbell","Noah Martin","Chloé Gagnon"],
+        CL:["Martina Rojas","Benjamín Muñoz","Isidora Silva","Vicente Torres","Florencia Soto"],
+        EG:["Mariam Hassan","Omar Ahmed","Nour Ibrahim","Youssef Ali","Salma Mahmoud"],
+        FR:["Camille Moreau","Gabriel Laurent","Léa Bernard","Hugo Petit","Inès Dubois"],
+        DE:["Lena Schneider","Felix Weber","Mia Fischer","Leon Wagner","Clara Becker"],
+        IN:["Aarav Sharma","Ananya Patel","Vivaan Singh","Aadhya Gupta","Ishaan Kumar"],
+        ID:["Putri Wijaya","Budi Santoso","Siti Lestari","Rizky Pratama","Dewi Anggraini"],
+        JP:["Haruto Sato","Yui Suzuki","Ren Tanaka","Hina Watanabe","Sota Ito"],
+        KE:["Amina Otieno","Brian Mwangi","Wanjiku Njoroge","Daniel Kiptoo","Nia Kamau"],
+        MX:["Sofía Hernández","Mateo García","Valentina López","Santiago Martínez","Camila Pérez"],
+        NL:["Sophie de Vries","Daan Jansen","Emma van Dijk","Lucas Bakker","Lotte Visser"],
+        NO:["Ingrid Hansen","Magnus Johansen","Nora Olsen","Emil Larsen","Sigrid Berg"],
+        PL:["Anna Zielińska","Jakub Nowak","Zofia Wiśniewska","Antoni Kowalski","Maja Wójcik"],
+        ZA:["Naledi Nkosi","Thabo Dlamini","Amahle Mokoena","Lethabo Ndlovu","Sipho Khumalo"],
+        TH:["Nattaya Chaiyaporn","Thanakorn Srisai","Kanya Phrom","Preecha Boonmee","Suda Rattanakul"],
+        TR:["Elif Yılmaz","Emir Demir","Zeynep Kaya","Kerem Şahin","Aylin Çelik"],
+        UA:["Олена Ковальчук","Андрій Мельник","Марія Шевченко","Максим Бондаренко","Софія Ткаченко"]
+      };
+      const ministerNames = cabinetPools[country.iso2] || ["Alex Morgan","Maya Patel","Daniel Novak","Sofia Martin","Noah Chen"];
+      const portfolios = ["Финансы","Иностранные дела","Оборона","Экономика","Здравоохранение"];
       const client = await presidentialPool.connect();
       try {
         await client.query("BEGIN");
         await client.query("UPDATE game_saves SET status='finished',updated_at=now() WHERE owner_user_id=$1 AND status='active'",[gameUser.telegram_id]);
         const saveResult = await client.query(
-          "INSERT INTO game_saves(owner_user_id,save_name,country_id,president_name,president_age,president_bio,game_date,turn_number,state,status) VALUES($1,$2,$3,$4,$5,$6,'2026-01-01',1,$7::jsonb,'active') RETURNING id,save_name,president_name,president_age,president_bio,game_date,turn_number,state,status",
-          [gameUser.telegram_id,country.name_local || country.name_en,country.id,president,age,"Глава государства. Политическая карьера началась до избрания.",JSON.stringify(state)]
+          "INSERT INTO game_saves(owner_user_id,save_name,country_id,president_name,president_age,president_bio,game_date,turn_number,state,status) VALUES($1,$2,$3,$4,$5,$6,$7::date,1,$8::jsonb,'active') RETURNING id,save_name,president_name,president_age,president_bio,game_date,turn_number,state,status",
+          [gameUser.telegram_id,campaignTitle,country.id,president,age,bio,yearDate,JSON.stringify(state)]
         );
         const save = saveResult.rows[0];
-        const ministerNames = ["Ирина Волкова","Андрей Коваль","Мария Новак","Дмитрий Соколов","Лаура Мартинес"];
-        const portfolios = ["Финансы","Иностранные дела","Оборона","Экономика","Здравоохранение"];
         for (let i=0;i<portfolios.length;i++) {
-          await client.query("INSERT INTO ministers(save_id,portfolio,full_name,age,competence,loyalty,approval,traits) VALUES($1,$2,$3,$4,$5,$6,$7,'[]'::jsonb)",[save.id,portfolios[i],ministerNames[i],crypto.randomInt(38,61),crypto.randomInt(48,86),crypto.randomInt(45,88),crypto.randomInt(42,72)]);
+          const face = "p" + String(crypto.randomInt(1,17)).padStart(2,"0");
+          await client.query(
+            "INSERT INTO ministers(save_id,portfolio,full_name,age,competence,loyalty,approval,traits) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
+            [save.id,portfolios[i],ministerNames[i],crypto.randomInt(38,61),crypto.randomInt(48,86),crypto.randomInt(45,88),crypto.randomInt(42,72),JSON.stringify({portraitId:face})]
+          );
         }
-        const neighbours = await client.query("SELECT name_local,name_en FROM countries WHERE id<>$1 ORDER BY random() LIMIT 4",[country.id]);
+        const neighbours = await client.query(
+          "SELECT name_local,name_en FROM countries WHERE id<>$1 ORDER BY CASE WHEN region=$2 THEN 0 ELSE 1 END,name_en LIMIT 4",
+          [country.id,country.region]
+        );
         for (const n of neighbours.rows) {
-          await client.query("INSERT INTO diplomatic_relations(save_id,other_country_name,relation_score,status,treaties) VALUES($1,$2,$3,'neutral','[]'::jsonb)",[save.id,n.name_local || n.name_en,crypto.randomInt(-18,32)]);
+          await client.query(
+            "INSERT INTO diplomatic_relations(save_id,other_country_name,relation_score,status,treaties) VALUES($1,$2,0,'neutral','[]'::jsonb)",
+            [save.id,n.name_local || n.name_en]
+          );
         }
-        for (const unit of [["Сухопутные войска",42000],["Военно-воздушные силы",170],["Военно-морские силы",24],["Национальная гвардия",12000]]) {
-          await client.query("INSERT INTO military_units(save_id,unit_type,quantity,readiness,supply) VALUES($1,$2,$3,$4,$5)",[save.id,unit[0],unit[1],crypto.randomInt(55,84),crypto.randomInt(58,90)]);
+        const population = Number(state.population || 25);
+        const militaryUnits = [
+          ["Сухопутные войска",Math.max(8000,Math.round(population*2800)),67,72],
+          ["Военно-воздушные силы",Math.max(35,Math.round(Number(state.militaryPower||40)*2.4)),70,76],
+          ["Военно-морские силы",Math.max(3,Math.round(population*0.55)),64,69],
+          ["Национальная гвардия",Math.max(2500,Math.round(population*800)),68,74]
+        ];
+        for (const unit of militaryUnits) {
+          await client.query(
+            "INSERT INTO military_units(save_id,unit_type,quantity,readiness,supply) VALUES($1,$2,$3,$4,$5)",
+            [save.id,unit[0],unit[1],unit[2],unit[3]]
+          );
         }
-        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,'2026-01-01','inauguration',$2,$3,2,'{}'::jsonb)",[save.id,"Новый президент вступил в должность","В стране состоялась церемония вступления нового главы государства. Правительство приступает к формированию политической программы."]);
+        const startArticle = "В " + (country.name_local || country.name_en) + " состоялась церемония вступления в должность президента " + president + ". Новая администрация начинает работу с курсом «" + courseOptions[course].label + "». Стартовые условия: " + difficultyRule.label.toLowerCase() + ".";
+        await client.query(
+          "INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'inauguration',$3,$4,2,'{}'::jsonb)",
+          [save.id,yearDate,"Президент " + president + " вступил в должность",startArticle]
+        );
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'campaign_created',$3::jsonb)",[
+          gameUser.id,save.id,JSON.stringify({countryId:country.id,iso2:country.iso2,course,difficulty,startYear,portraitId})
+        ]);
         await client.query("COMMIT");
         return out(res,201,{game:{...save,iso2:country.iso2,name_en:country.name_en,name_local:country.name_local,flag_emoji:country.flag_emoji,government_type:country.government_type,region:country.region}});
       } catch (error) {
