@@ -24,7 +24,7 @@
 (() => {
   "use strict";
   const API = "https://br-little-union-b9iipjfz-nettleapi.compute.c-7.eu-central-1.aws.neon.tech";
-  const GAME = "https://merekwi.github.io/presedento-sim/frontend/";
+  const GAME = "https://merekwi.github.io/presedento-sim/";
   const status = document.getElementById("status");
   const setStatus = (message, error = false) => { status.textContent = message; status.classList.toggle("error", error); };
   const state = new URLSearchParams(location.search).get("state") || "";
