@@ -91,6 +91,51 @@ function clampNumber(value, min, max) {
   const n = Number(value);
   return Math.max(min, Math.min(max, Number.isFinite(n) ? n : 0));
 }
+
+const CAMPAIGN_GROUP_WEIGHTS={workers:0.25,business:0.16,rural:0.15,youth:0.13,publicSector:0.14,conservative:0.17};
+const CAMPAIGN_ISSUES=[
+{id:"budget",title:"Бюджет, налоги и государственный долг",context:"Казначейству нужно финансировать услуги, сдерживать дефицит и создавать условия для инвестиций. Каждое обещание придётся чем-то оплачивать.",question:"Как привести государственные финансы в порядок?",indicators:[{key:"treasury",label:"Казна"},{key:"debt",label:"Государственный долг"},{key:"taxRate",label:"Налоговая ставка"}],choices:[
+{id:"tax_reform",title:"Справедливая налоговая реформа",description:"Повысить сборы с крупных доходов, закрыть схемы уклонения и защитить малый бизнес.",benefit:"Новые бюджетные доходы и более справедливая налоговая нагрузка.",risk:"Крупный бизнес может отложить инвестиции; доходы появятся не сразу.",groupEffects:{workers:5,business:-5,rural:0,youth:3,publicSector:4,conservative:-2},credibility:3,trust:1,fiscalImpactPct:-0.4,policyEffects:{taxRate:1,gdpGrowth:-0.1,publicServices:0.2}},
+{id:"spending_review",title:"Аудит расходов и сокращение дефицита",description:"Пересмотреть закупки, субсидии и дублирующие ведомства, защитив ключевые социальные обязательства.",benefit:"Меньше давления на долг и более дисциплинированный бюджет.",risk:"Сокращения затронут госсектор и могут замедлить общественные услуги.",groupEffects:{workers:-5,business:3,rural:-2,youth:-3,publicSector:-6,conservative:3},credibility:3,trust:0,fiscalImpactPct:-0.8,policyEffects:{publicServices:-0.7,approval:-0.2,stability:0.1}},
+{id:"development_bonds",title:"Заём для национальной программы инвестиций",description:"Выпустить долгосрочные облигации для транспорта, энергетики и производственных мощностей.",benefit:"Новые заказы, рабочие места и инвестиции в инфраструктуру.",risk:"Государственный долг и расходы на обслуживание вырастут.",groupEffects:{workers:2,business:-1,rural:2,youth:3,publicSector:2,conservative:-2},credibility:-2,trust:0,fiscalImpactPct:0.7,policyEffects:{debt:1.8,infrastructure:0.6,gdpGrowth:0.1}}
+]},
+{id:"prices",title:"Стоимость жизни и инфляция",context:"Домохозяйства жалуются на цены на продукты, жильё и энергию. Бизнес предупреждает, что резкие ограничения могут привести к дефициту.",question:"Как защитить покупательную способность?",indicators:[{key:"inflation",label:"Инфляция"},{key:"unemployment",label:"Безработица"},{key:"treasury",label:"Казна"}],choices:[
+{id:"targeted_support",title:"Адресная поддержка семей",description:"Ввести временные выплаты малообеспеченным и компенсации коммунальных расходов с проверкой нуждаемости.",benefit:"Помощь направлена тем, кто сильнее всего страдает от роста цен.",risk:"Потребуются бюджетные средства и работающая проверка получателей.",groupEffects:{workers:5,business:-1,rural:3,youth:2,publicSector:3,conservative:1},credibility:1,trust:0,fiscalImpactPct:0.5,policyEffects:{approval:0.5,publicServices:0.3,inflation:-0.08}},
+{id:"independent_cb",title:"Независимость центрального банка",description:"Сохранить денежно-кредитную дисциплину и не давить на регулятора ради краткосрочного роста.",benefit:"Повышается доверие к антиинфляционной политике и валюте.",risk:"Кредитование и занятость могут замедлиться до снижения инфляции.",groupEffects:{workers:-3,business:3,rural:-2,youth:-2,publicSector:-1,conservative:3},credibility:3,trust:1,fiscalImpactPct:-0.1,policyEffects:{inflation:-0.45,gdpGrowth:-0.08,unemployment:0.12}},
+{id:"price_controls",title:"Временное ограничение цен",description:"Установить предельные цены на ограниченный набор товаров первой необходимости.",benefit:"Может быстро дать передышку семьям.",risk:"Без компенсаций поставщикам возможны дефицит, серый рынок и падение качества.",groupEffects:{workers:4,business:-6,rural:1,youth:1,publicSector:1,conservative:0},credibility:-2,trust:-1,fiscalImpactPct:0.25,policyEffects:{inflation:-0.1,corruption:0.35,approval:0.3}}
+]},
+{id:"jobs",title:"Рабочие места и промышленность",context:"Работники требуют достойной оплаты и защиты. Предприниматели настаивают на предсказуемых правилах и снижении издержек.",question:"Какая модель занятости станет основой роста?",indicators:[{key:"unemployment",label:"Безработица"},{key:"gdpGrowth",label:"Рост ВВП"},{key:"infrastructure",label:"Инфраструктура"}],choices:[
+{id:"worker_rights",title:"Усилить коллективные переговоры",description:"Расширить роль профсоюзов, отраслевых соглашений и контроля трудового законодательства.",benefit:"Работники получают больше переговорной силы и защищённости.",risk:"Издержки компаний могут вырасти, особенно у малого бизнеса.",groupEffects:{workers:5,business:-5,rural:1,youth:3,publicSector:1,conservative:-2},credibility:1,trust:0,fiscalImpactPct:0.15,policyEffects:{unemployment:0.12,gdpGrowth:-0.08,approval:0.3}},
+{id:"investment_credits",title:"Стимулы для инвестиций и найма",description:"Дать ограниченные по сроку льготы компаниям, которые создают рабочие места и обучают сотрудников.",benefit:"Может привлечь инвестиции и повысить производительность.",risk:"Есть риск субсидировать компании, которые наняли бы людей и без льгот.",groupEffects:{workers:2,business:5,rural:2,youth:4,publicSector:1,conservative:2},credibility:1,trust:0,fiscalImpactPct:0.45,policyEffects:{gdpGrowth:0.18,unemployment:-0.18}},
+{id:"public_works",title:"Государственная программа общественных работ",description:"Запустить конкурсные проекты ремонта дорог, школ и водоснабжения в регионах с высокой безработицей.",benefit:"Быстрее создаются рабочие места и полезные объекты.",risk:"Высокая стоимость и риск неэффективных подрядов.",groupEffects:{workers:3,business:1,rural:4,youth:2,publicSector:4,conservative:-1},credibility:-1,trust:0,fiscalImpactPct:0.7,policyEffects:{infrastructure:0.9,unemployment:-0.1,debt:0.4}}
+]},
+{id:"regions",title:"Столица и регионы",context:"Столица концентрирует инвестиции и кадры, а отдалённые районы сталкиваются с нехваткой врачей, транспорта и рабочих мест.",question:"Как уменьшить территориальное неравенство?",indicators:[{key:"publicServices",label:"Госуслуги"},{key:"infrastructure",label:"Инфраструктура"},{key:"stability",label:"Стабильность"}],choices:[
+{id:"regional_fund",title:"Фонд выравнивания регионов",description:"Распределять часть доходов по формуле бедности, населения и состояния инфраструктуры.",benefit:"Повышает доступность базовых услуг за пределами столицы.",risk:"Богатые регионы могут возражать против перераспределения.",groupEffects:{workers:2,business:-1,rural:5,youth:2,publicSector:4,conservative:1},credibility:0,trust:0,fiscalImpactPct:0.45,policyEffects:{publicServices:0.45,infrastructure:0.55,stability:0.1}},
+{id:"regional_autonomy",title:"Самостоятельность регионов",description:"Передать регионам налоговые полномочия и право определять приоритеты в рамках общих стандартов.",benefit:"Местные власти лучше знают потребности жителей.",risk:"Богатые территории могут развиваться быстрее бедных.",groupEffects:{workers:-1,business:2,rural:2,youth:2,publicSector:-3,conservative:1},credibility:2,trust:1,fiscalImpactPct:-0.1,policyEffects:{stability:0.2,corruption:-0.25}},
+{id:"export_corridors",title:"Региональные производственные коридоры",description:"Связать сельские районы, порты и промышленные центры логистикой и технопарками.",benefit:"Создаёт рынки, рабочие места и условия для инвестиций.",risk:"Результат потребует длительных вложений.",groupEffects:{workers:1,business:3,rural:4,youth:3,publicSector:0,conservative:1},credibility:1,trust:0,fiscalImpactPct:0.35,policyEffects:{gdpGrowth:0.16,infrastructure:0.4,unemployment:-0.06}}
+]},
+{id:"institutions",title:"Суды, коррупция и институты",context:"Бизнес требует независимого суда, общественные организации — прозрачности, а часть элит опасается пересмотра старых договорённостей.",question:"Как провести реформу институтов, не вызвав паралич власти?",indicators:[{key:"corruption",label:"Коррупция"},{key:"stability",label:"Стабильность"},{key:"approval",label:"Одобрение"}],choices:[
+{id:"independent_courts",title:"Независимые суды и открытые закупки",description:"Изменить порядок назначения судей, раскрыть госконтракты и усилить контрольные органы.",benefit:"Повышает доверие к правилам и равенству перед законом.",risk:"Влиятельные группы будут сопротивляться; эффект проявится постепенно.",groupEffects:{workers:2,business:4,rural:1,youth:5,publicSector:-1,conservative:1},credibility:2,trust:5,fiscalImpactPct:0.08,policyEffects:{corruption:-0.65,democracyIndex:1.4,stability:-0.05}},
+{id:"anti_corruption",title:"Жёсткая антикоррупционная кампания",description:"Проверить крупные контракты и расследовать злоупотребления специальными следственными группами.",benefit:"Быстрый сигнал о борьбе с безнаказанностью.",risk:"Без независимого суда расследования могут стать инструментом давления.",groupEffects:{workers:3,business:-3,rural:2,youth:1,publicSector:2,conservative:4},credibility:-1,trust:-1,fiscalImpactPct:0.1,policyEffects:{corruption:-0.2,approval:0.2,democracyIndex:-0.25}},
+{id:"elite_pact",title:"Пакт с влиятельными политическими группами",description:"Договориться о гарантиях и постепенном обновлении институтов в обмен на поддержку реформ.",benefit:"Снижает риск немедленного саботажа.",risk:"Общество может воспринять соглашение как защиту старых элит.",groupEffects:{workers:-3,business:2,rural:-1,youth:-4,publicSector:1,conservative:3},credibility:0,trust:-3,fiscalImpactPct:0,policyEffects:{stability:0.35,corruption:0.3,democracyIndex:-0.8}}
+]},
+{id:"foreign_policy",title:"Безопасность и внешняя политика",context:"Стране приходится балансировать между военными рисками, торговыми интересами и самостоятельностью внешней политики.",question:"Какую международную стратегию предложит ваша партия?",indicators:[{key:"militaryPower",label:"Военный потенциал"},{key:"gdpGrowth",label:"Рост ВВП"},{key:"debt",label:"Государственный долг"}],choices:[
+{id:"security_alliance",title:"Углубить оборонный союз",description:"Добиваться гарантий безопасности и координации закупок с надёжными партнёрами.",benefit:"Укрепляет сдерживание и уверенность союзников.",risk:"Снижает гибкость и требует дополнительных расходов.",groupEffects:{workers:-1,business:3,rural:-1,youth:1,publicSector:2,conservative:4},credibility:1,trust:1,fiscalImpactPct:0.3,policyEffects:{militaryPower:0.45,stability:0.1,gdpGrowth:-0.05}},
+{id:"strategic_autonomy",title:"Стратегическая самостоятельность",description:"Сохранять сотрудничество с разными блоками, не принимая ограничивающих обязательств.",benefit:"Больше гибкости в кризисах и переговорах.",risk:"Партнёры могут сомневаться в надёжности курса.",groupEffects:{workers:1,business:1,rural:2,youth:1,publicSector:1,conservative:2},credibility:2,trust:1,fiscalImpactPct:0,policyEffects:{stability:0.2,militaryPower:0.1}},
+{id:"trade_diplomacy",title:"Торговая дипломатия и экспортные соглашения",description:"Открывать рынки, развивать транспортные коридоры и диверсифицировать поставки.",benefit:"Поддерживает бизнес, занятость и рост.",risk:"Соглашения могут потребовать уступок и усилить внешнюю зависимость.",groupEffects:{workers:2,business:5,rural:3,youth:3,publicSector:1,conservative:-2},credibility:1,trust:1,fiscalImpactPct:0.1,policyEffects:{gdpGrowth:0.2,unemployment:-0.06}}
+]}
+];
+function buildCampaignAgenda(){return CAMPAIGN_ISSUES.map(issue=>({id:issue.id,title:issue.title,context:issue.context,question:issue.question,indicators:issue.indicators.map(item=>({...item})),choices:issue.choices.map(({id,title,description,benefit,risk})=>({id,title,description,benefit,risk}))}));}
+function createVoterGroups(approval=45,difficultyOffset=0){
+ const base=clampNumber(41+(Number(approval)-50)*0.18+difficultyOffset,30,55),offsets={workers:0,business:-2,rural:-1,youth:1,publicSector:0,conservative:-1},groups={};
+ for(const [key,offset] of Object.entries(offsets))groups[key]=Number(clampNumber(base+offset+crypto.randomInt(-4,5),18,68).toFixed(1));
+ return groups;
+}
+function calculateCampaignSupport(groups,credibility=55,institutionalTrust=55,fiscalImpactPct=0){
+ const weighted=Object.entries(CAMPAIGN_GROUP_WEIGHTS).reduce((sum,[key,weight])=>sum+Number(groups&&groups[key]||0)*weight,0);
+ return Number(clampNumber(weighted+(Number(credibility)-55)*0.07+(Number(institutionalTrust)-55)*0.04-Math.max(0,Number(fiscalImpactPct||0)-1.1)*0.45,5,85).toFixed(1));
+}
+
 function assessPolicy(order, state) {
   const text = String(order || "").toLowerCase();
   const gdp = clampNumber(state.gdp || 350, 1, 100000000);
@@ -267,121 +312,57 @@ async function main(req,res,forcedPath) {
       return out(res,200,{countries:countries.rows});
     }
 
-    if (path === "/api/presidential/game/election/campaign" && req.method === "POST") {
-      if (!gameUser) return out(res,401,{error:"authentication_required"});
-      const input=await readBody(req), action=txt(input.action,40);
-      const operations = {
-        rally:{support:4,cost:0.18,approval:0.25,headline:"Партия провела встречи с избирателями",article:"Кандидат посетил регионы страны и представил программу местным жителям."},
-        debate:{support:4,cost:0.08,approval:0.2,headline:"Состоялись публичные предвыборные дебаты",article:"Кандидаты ответили на вопросы журналистов и представили позиции по ключевым реформам."},
-        manifesto:{support:3,cost:0.12,approval:0.15,headline:"Опубликована предвыборная программа",article:"Партия представила программу экономических, социальных и институциональных преобразований."},
-        coalition:{support:5,cost:0.3,approval:0.2,headline:"Заключено предвыборное коалиционное соглашение",article:"Политические силы договорились о совместной платформе и поддержке кандидата."}
-      };
-      const operation=operations[action];
-      if (!operation) return out(res,400,{error:"invalid_campaign_action"});
+    if (path === "/api/presidential/game/election/decision" && req.method === "POST") {
+      if(!gameUser)return out(res,401,{error:"authentication_required"});
+      const input=await readBody(req),issueId=txt(input.issueId,40),choiceId=txt(input.choiceId,48);
+      const issue=CAMPAIGN_ISSUES.find(item=>item.id===issueId),choice=issue&&issue.choices.find(item=>item.id===choiceId);
+      if(!issue||!choice)return out(res,400,{error:"invalid_campaign_decision"});
       const client=await presidentialPool.connect();
-      try {
+      try{
         await client.query("BEGIN");
         const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
-        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
-        const game=saved.rows[0], state={...(game.state||{})}, election={...(state.election||{})};
-        if (!["election_campaign","election"].includes(state.phase)) { await client.query("ROLLBACK"); return out(res,409,{error:"no_active_election"}); }
-        const remaining=Number(election.actionsRemaining||0);
-        if (remaining<1) { await client.query("ROLLBACK"); return out(res,409,{error:"campaign_actions_exhausted"}); }
-        const cost=Number(operation.cost.toFixed(2));
-        if (Number(state.treasury||0)<cost) { await client.query("ROLLBACK"); return out(res,409,{error:"insufficient_campaign_funds",required:cost,available:state.treasury}); }
-        state.treasury=Number((Number(state.treasury)-cost).toFixed(2));
-        state.budgetBalance=Number((Number(state.budgetBalance||0)-cost).toFixed(2));
-        election.candidateSupport=Number(clampNumber(Number(election.candidateSupport||0)+operation.support,0,78).toFixed(2));
-        election.actionsRemaining=remaining-1;
-        election.actionsTaken=[...(Array.isArray(election.actionsTaken)?election.actionsTaken:[]),action];
-        election.lastAction=action;
+        if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
+        const game=saved.rows[0],state={...(game.state||{})},election={...(state.election||{})};
+        if(state.phase!=="election_campaign"&&state.phase!=="election"){await client.query("ROLLBACK");return out(res,409,{error:"no_active_election"});}
+        const index=Number(election.issueIndex||0),agenda=Array.isArray(election.agenda)?election.agenda:[];
+        const expected=CAMPAIGN_ISSUES[index];
+        if(!expected||expected.id!==issueId||agenda[index]?.id!==issueId){await client.query("ROLLBACK");return out(res,409,{error:"campaign_issue_out_of_order",expectedIssue:expected?.id||null});}
+        const groups={...(election.voterGroups||{})};
+        for(const [key,delta] of Object.entries(choice.groupEffects||{}))groups[key]=Number(clampNumber(Number(groups[key]||40)+Number(delta||0),8,82).toFixed(1));
+        election.voterGroups=groups;
+        election.fiscalImpactPct=Number((Number(election.fiscalImpactPct||0)+Number(choice.fiscalImpactPct||0)).toFixed(2));
+        election.policyCredibility=Number(clampNumber(Number(election.policyCredibility||55)+Number(choice.credibility||0)-Math.max(0,election.fiscalImpactPct-1.1)*0.25,5,95).toFixed(1));
+        election.institutionalTrust=Number(clampNumber(Number(election.institutionalTrust||55)+Number(choice.trust||0),5,95).toFixed(1));
+        const policyEffects={...(election.policyEffects||{})};
+        for(const [key,value] of Object.entries(choice.policyEffects||{}))policyEffects[key]=Number((Number(policyEffects[key]||0)+Number(value||0)).toFixed(3));
+        election.policyEffects=policyEffects;
+        election.issueIndex=index+1;
+        election.decisions=[...(Array.isArray(election.decisions)?election.decisions:[]),{issueId,issueTitle:issue.title,choiceId,choiceTitle:choice.title,policyEffects:choice.policyEffects,fiscalImpactPct:choice.fiscalImpactPct}];
+        election.candidateSupport=calculateCampaignSupport(groups,election.policyCredibility,election.institutionalTrust,election.fiscalImpactPct);
+        election.oppositionSupport=Number((100-election.candidateSupport).toFixed(1));
+        election.currentIssue=CAMPAIGN_ISSUES[index+1]?.id||null;
         state.election=election;
-        state.approval=Number(clampNumber(Number(state.approval||50)+operation.approval,0,100).toFixed(2));
         await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",[JSON.stringify(state),game.id]);
-        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'campaign',$3,$4,1,$5::jsonb)",[game.id,game.game_date,operation.headline,operation.article,JSON.stringify({action,cost,supportGain:operation.support,remaining:election.actionsRemaining})]);
-        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'election_campaign_action',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({action,cost,support:election.candidateSupport,remaining:election.actionsRemaining})]);
+        const headline=issue.title+": "+choice.title;
+        const article=choice.description+" Преимущество: "+choice.benefit+" Риск: "+choice.risk;
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'campaign_policy',$3,$4,1,$5::jsonb)",[game.id,game.game_date,headline,article,JSON.stringify({issueId,choiceId,candidateSupport:election.candidateSupport,policyCredibility:election.policyCredibility,institutionalTrust:election.institutionalTrust,fiscalImpactPct:election.fiscalImpactPct})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'election_policy_decision',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({issueId,choiceId,issueIndex:election.issueIndex,candidateSupport:election.candidateSupport})]);
         await client.query("COMMIT");
-        return out(res,200,{ok:true,election,treasury:state.treasury,headline:operation.headline});
-      } catch(error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
+        return out(res,200,{ok:true,election,message:"Решение учтено в программе партии."});
+      }catch(error){await client.query("ROLLBACK");throw error;}
+      finally{client.release();}
+    }
+
+    if (path === "/api/presidential/game/election/campaign" && req.method === "POST") {
+      return out(res,410,{error:"legacy_four_action_campaign_removed",replacement:"/api/presidential/game/election/decision"});
     }
 
     if (path === "/api/presidential/game/election/commission" && req.method === "POST") {
-      if (!gameUser) return out(res,401,{error:"authentication_required"});
-      const client=await presidentialPool.connect();
-      try {
-        await client.query("BEGIN");
-        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
-        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
-        const game=saved.rows[0], state={...(game.state||{})}, election={...(state.election||{})};
-        if (!["election_campaign","election"].includes(state.phase)) { await client.query("ROLLBACK"); return out(res,409,{error:"no_active_election"}); }
-        const control=Number(election.commissionControl||0);
-        if (control>=70) { await client.query("ROLLBACK"); return out(res,409,{error:"commission_already_controlled"}); }
-        const cost=Number(Math.max(0.25,Number(state.gdp||350)*0.00012).toFixed(2));
-        if (Number(state.treasury||0)<cost) { await client.query("ROLLBACK"); return out(res,409,{error:"insufficient_campaign_funds",required:cost,available:state.treasury}); }
-        state.treasury=Number((Number(state.treasury)-cost).toFixed(2));
-        state.budgetBalance=Number((Number(state.budgetBalance||0)-cost).toFixed(2));
-        state.corruption=clampNumber(Number(state.corruption||30)+6,0,100);
-        state.stability=clampNumber(Number(state.stability||60)-3,0,100);
-        state.approval=clampNumber(Number(state.approval||50)-1.5,0,100);
-        election.commissionControl=Math.min(70,control+35);
-        election.commissionCaptured=true;
-        state.election=election;
-        await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",[JSON.stringify(state),game.id]);
-        const headline="Влияние на Центральную избирательную комиссию усилено";
-        const article="Администрация добилась контроля над частью руководства избирательной комиссии. Это повышает возможность административного вмешательства, но ослабляет доверие к институтам.";
-        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'institutional_crisis',$3,$4,3,$5::jsonb)",[game.id,game.game_date,headline,article,JSON.stringify({commissionControl:election.commissionControl,cost,corruption:6,stability:-3,approval:-1.5})]);
-        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'election_commission_capture',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({control:election.commissionControl,cost})]);
-        await client.query("COMMIT");
-        return out(res,200,{ok:true,election,commissionControl:election.commissionControl,cost});
-      } catch(error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
+      return out(res,410,{error:"legacy_commission_capture_removed"});
     }
 
     if (path === "/api/presidential/game/election/dictatorship" && req.method === "POST") {
-      if (!gameUser) return out(res,401,{error:"authentication_required"});
-      const client=await presidentialPool.connect();
-      try {
-        await client.query("BEGIN");
-        const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
-        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
-        const game=saved.rows[0], state={...(game.state||{})}, election={...(state.election||{})};
-        if (!["election_campaign","election"].includes(state.phase) || Number(election.commissionControl||0)<70) {
-          await client.query("ROLLBACK");
-          return out(res,409,{error:"commission_control_required"});
-        }
-        state.phase="government";
-        state.dictatorship=true;
-        state.regimeType="Авторитарная диктатура";
-        state.nextElectionDate=null;
-        state.approval=clampNumber(Number(state.approval||50)-12,0,100);
-        state.stability=clampNumber(Number(state.stability||50)-8,0,100);
-        state.corruption=clampNumber(Number(state.corruption||30)+12,0,100);
-        state.democracyIndex=clampNumber(Number(state.democracyIndex??55)-35,0,100);
-        election.lastResult="power_grab";
-        election.ended=true;
-        state.election=election;
-        await client.query("UPDATE game_saves SET state=$1::jsonb,president_bio=$2,updated_at=now() WHERE id=$3",[JSON.stringify(state),"Глава государства. Установлен авторитарный режим; очередные конкурентные выборы отменены.",game.id]);
-        const headline="Президент объявил чрезвычайную реорганизацию политической системы";
-        const article="После установления контроля над Центральной избирательной комиссией президент сосредоточил власть в исполнительной вертикали. Конкурентные национальные выборы отменены. Международная легитимность и общественное доверие резко снизились.";
-        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'constitutional_crisis',$3,$4,4,$5::jsonb)",[game.id,game.game_date,headline,article,JSON.stringify({dictatorship:true,approval:-12,stability:-8,corruption:12})]);
-        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'dictatorship_established',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({commissionControl:election.commissionControl})]);
-        await client.query("COMMIT");
-        return out(res,200,{ok:true,dictatorship:true,game:{id:game.id,state}});
-      } catch(error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
+      return out(res,410,{error:"legacy_one_click_dictatorship_removed"});
     }
 
     if (path === "/api/presidential/game/election/vote" && req.method === "POST") {
@@ -393,9 +374,9 @@ async function main(req,res,forcedPath) {
         if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
         const game=saved.rows[0], state={...(game.state||{})}, election={...(state.election||{})};
         if (!["election_campaign","election"].includes(state.phase)) { await client.query("ROLLBACK"); return out(res,409,{error:"no_active_election"}); }
-        if (Number(election.actionsRemaining||0)>0) { await client.query("ROLLBACK"); return out(res,409,{error:"campaign_actions_remaining",remaining:election.actionsRemaining}); }
-        const noise=crypto.randomInt(-2,4);
-        const voteShare=Number(clampNumber(Number(election.candidateSupport||35)+Number(election.commissionControl||0)*0.10+noise,5,95).toFixed(1));
+        const agendaLength=Array.isArray(election.agenda)?election.agenda.length:0;if(!agendaLength||Number(election.issueIndex||0)<agendaLength){await client.query("ROLLBACK");return out(res,409,{error:"campaign_decisions_remaining",remaining:Math.max(0,agendaLength-Number(election.issueIndex||0))});}
+        const noise=crypto.randomInt(-2,3);
+        const voteShare=Number(clampNumber(calculateCampaignSupport(election.voterGroups||{},election.policyCredibility||55,election.institutionalTrust||55,election.fiscalImpactPct||0)+noise,5,95).toFixed(1));
         const won=voteShare>=50;
         const electionDate=election.scheduledDate || game.game_date;
         if (won) {
@@ -403,6 +384,8 @@ async function main(req,res,forcedPath) {
           state.electionsWon=Number(state.electionsWon||0)+1;
           state.nextElectionDate=election.firstElection ? (Number(state.startYear||2026)+4)+"-01-01" : (() => { const d=new Date(String(electionDate).slice(0,10)+"T00:00:00Z"); d.setUTCFullYear(d.getUTCFullYear()+4); return d.toISOString().slice(0,10); })();
           state.approval=clampNumber(Number(state.approval||50)+4,0,100);
+          state.policyMandate={status:"active",monthsElapsed:0,durationMonths:12,effects:election.policyEffects||{},fiscalImpactPct:Number(election.fiscalImpactPct||0),decisions:election.decisions||[]};
+          state.democracyIndex=clampNumber(Number(state.democracyIndex??55)+(Number(election.institutionalTrust||55)-55)*0.12,0,100);
           election.lastResult="victory";
           election.voteShare=voteShare;
           election.oppositionShare=Number((100-voteShare).toFixed(1));
@@ -519,6 +502,17 @@ async function main(req,res,forcedPath) {
         const gdp=Math.max(1,Number(state.gdp||350));
         const previous={gdp:Number(state.gdp||350),gdpGrowth:Number(state.gdpGrowth||2),inflation:Number(state.inflation||3),unemployment:Number(state.unemployment||5),approval:Number(state.approval||50),stability:Number(state.stability||60),treasury:Number(state.treasury||0)};
         const infrastructure=Number(state.infrastructure||52), education=Number(state.education||55), corruption=Number(state.corruption||34);
+        const mandate=state.policyMandate||null,mandateEffects={};
+        let mandateBudgetDelta=0;
+        const mandateActive=Boolean(mandate&&mandate.status==="active"&&Number(mandate.monthsElapsed||0)<Number(mandate.durationMonths||12));
+        if(mandateActive){
+          const duration=Math.max(1,Number(mandate.durationMonths||12));
+          for(const [key,total] of Object.entries(mandate.effects||{}))mandateEffects[key]=Number(total||0)/duration;
+          mandateBudgetDelta=Number((-gdp*Number(mandate.fiscalImpactPct||0)/100/duration).toFixed(2));
+          mandate.monthsElapsed=Number(mandate.monthsElapsed||0)+1;
+          if(mandate.monthsElapsed>=duration)mandate.status="completed";
+          state.policyMandate=mandate;
+        }
         const ministers=await client.query("SELECT portfolio,competence,loyalty,traits FROM ministers WHERE save_id=$1 AND dismissed_at IS NULL",[game.id]);
         const projectEffects={gdpGrowth:0,inflation:0,unemployment:0,approval:0,stability:0,corruption:0,publicServices:0,education:0,healthcare:0,infrastructure:0,militaryPower:0};
         let projectOutflow=0;
@@ -575,21 +569,23 @@ async function main(req,res,forcedPath) {
           {type:"politics",headline:"Аудит выявил нарушения в закупках",article:"Контрольные органы сообщили о нарушениях в нескольких государственных контрактах. Начата проверка, профильному министерству поручено представить предложения.",approval:corruption>40?-1.8:0.5,stability:-0.2,growth:-0.03,treasury:-0.1,inflation:0}
         ];
         const event=randomEvents[crypto.randomInt(randomEvents.length)];
-        state.gdpGrowth=clampNumber(Number(state.gdpGrowth||0)+(infrastructure-50)*0.004+(education-50)*0.002-(corruption-30)*0.001+ministerEffects.gdpGrowth+projectEffects.gdpGrowth+treatyEffects.gdpGrowth+event.growth,-15,20);
-        const monthlyBalance=Number((gdp*((Number(state.taxRate||22)-21.5)/100/12)).toFixed(2));
+        state.gdpGrowth=clampNumber(Number(state.gdpGrowth||0)+(infrastructure-50)*0.004+(education-50)*0.002-(corruption-30)*0.001+ministerEffects.gdpGrowth+projectEffects.gdpGrowth+treatyEffects.gdpGrowth+Number(mandateEffects.gdpGrowth||0)+event.growth,-15,20);
+        state.taxRate=Number(clampNumber(Number(state.taxRate||22)+Number(mandateEffects.taxRate||0),0,70).toFixed(2));
+        const monthlyBalance=Number((gdp*((Number(state.taxRate||22)-21.5)/100/12)+mandateBudgetDelta).toFixed(2));
         const netBudget=Number((monthlyBalance-projectOutflow).toFixed(2));
         state.treasury=Number(Math.max(0,Number(state.treasury||0)+monthlyBalance+event.treasury+ministerEffects.budgetBalance*0.05).toFixed(2));
         state.budgetBalance=netBudget;
-        state.debt=Number(clampNumber(Number(state.debt||0)+(netBudget<0?Math.abs(netBudget)/gdp*100:0),0,500).toFixed(2));
+        state.debt=Number(clampNumber(Number(state.debt||0)+(netBudget<0?Math.abs(netBudget)/gdp*100:0)+Number(mandateEffects.debt||0),0,500).toFixed(2));
+        state.democracyIndex=Number(clampNumber(Number(state.democracyIndex??55)+Number(mandateEffects.democracyIndex||0),0,100).toFixed(2));
         state.gdp=Number((gdp*(1+state.gdpGrowth/1200)).toFixed(2));
-        state.inflation=Number(clampNumber(Number(state.inflation||3)+event.inflation+(state.gdpGrowth>5?0.07:-0.02)+(Math.random()-0.5)*0.12+ministerEffects.inflation+projectEffects.inflation+treatyEffects.inflation,0,100).toFixed(2));
-        state.unemployment=Number(clampNumber(Number(state.unemployment||5)-state.gdpGrowth*0.025+0.025+(Math.random()-0.5)*0.18+ministerEffects.unemployment+projectEffects.unemployment+treatyEffects.unemployment,0,60).toFixed(2));
-        state.approval=Number(clampNumber(Number(state.approval||50)+event.approval+(state.gdpGrowth-2)*0.16-(state.inflation-3)*0.045-(state.unemployment-5)*0.10+(Number(state.publicServices||58)-55)*0.045+ministerEffects.approval+projectEffects.approval,0,100).toFixed(2));
-        state.stability=Number(clampNumber(Number(state.stability||60)+event.stability+(state.approval-50)*0.025-(corruption-35)*0.018+ministerEffects.stability+projectEffects.stability+treatyEffects.stability,0,100).toFixed(2));
+        state.inflation=Number(clampNumber(Number(state.inflation||3)+event.inflation+(state.gdpGrowth>5?0.07:-0.02)+(Math.random()-0.5)*0.12+ministerEffects.inflation+projectEffects.inflation+treatyEffects.inflation+Number(mandateEffects.inflation||0),0,100).toFixed(2));
+        state.unemployment=Number(clampNumber(Number(state.unemployment||5)-state.gdpGrowth*0.025+0.025+(Math.random()-0.5)*0.18+ministerEffects.unemployment+projectEffects.unemployment+treatyEffects.unemployment+Number(mandateEffects.unemployment||0),0,60).toFixed(2));
+        state.approval=Number(clampNumber(Number(state.approval||50)+event.approval+(state.gdpGrowth-2)*0.16-(state.inflation-3)*0.045-(state.unemployment-5)*0.10+(Number(state.publicServices||58)-55)*0.045+ministerEffects.approval+projectEffects.approval+Number(mandateEffects.approval||0),0,100).toFixed(2));
+        state.stability=Number(clampNumber(Number(state.stability||60)+event.stability+(state.approval-50)*0.025-(corruption-35)*0.018+ministerEffects.stability+projectEffects.stability+treatyEffects.stability+Number(mandateEffects.stability||0),0,100).toFixed(2));
         for (const key of ["publicServices","education","healthcare","infrastructure","militaryPower"]) {
-          if (ministerEffects[key]||projectEffects[key]) state[key]=Number(clampNumber(Number(state[key]||50)+ministerEffects[key]+projectEffects[key],0,100).toFixed(2));
+          if (ministerEffects[key]||projectEffects[key]||mandateEffects[key]) state[key]=Number(clampNumber(Number(state[key]||50)+ministerEffects[key]+projectEffects[key]+Number(mandateEffects[key]||0),0,100).toFixed(2));
         }
-        state.corruption=Number(clampNumber(Number(state.corruption||30)+ministerEffects.corruption+projectEffects.corruption,0,100).toFixed(2));
+        state.corruption=Number(clampNumber(Number(state.corruption||30)+ministerEffects.corruption+projectEffects.corruption+Number(mandateEffects.corruption||0),0,100).toFixed(2));
         state.actionPoints=2;
         const updated=await client.query("UPDATE game_saves SET state=$1::jsonb,turn_number=turn_number+1,game_date=game_date+interval '1 month',updated_at=now() WHERE id=$2 RETURNING id,game_date,turn_number,state",[JSON.stringify(state),game.id]);
         const newDate=String(updated.rows[0].game_date).slice(0,10);
@@ -598,14 +594,17 @@ async function main(req,res,forcedPath) {
           const triggerDate=new Date(String(state.nextElectionDate).slice(0,10)+"T00:00:00Z");
           triggerDate.setUTCMonth(triggerDate.getUTCMonth()-3);
           if (new Date(newDate+"T00:00:00Z")>=triggerDate) {
-            const support=clampNumber(34+(Number(state.approval||50)-50)*0.32+(Number(state.stability||60)-60)*0.08+(Number(state.gdpGrowth||2)-2)*0.6-(Number(state.inflation||3)-3)*0.04-(Number(state.unemployment||5)-5)*0.12,18,55);
+            const voterGroups=createVoterGroups(Number(state.approval||45),0);
+            const policyCredibility=crypto.randomInt(48,64);
+            const institutionalTrust=Number(clampNumber(state.democracyIndex??55,5,95).toFixed(1));
+            const support=calculateCampaignSupport(voterGroups,policyCredibility,institutionalTrust,0);
             state.phase="election";
             state.election={
               kind:state.election&&state.election.kind||"presidential",
               type:state.election&&state.election.type||"Национальные выборы",
               partyName:state.election&&state.election.partyName||"Партия национального развития",
               candidateSupport:Number(support.toFixed(1)),oppositionSupport:Number((100-support).toFixed(1)),
-              actionsRemaining:4,actionsTaken:[],commissionControl:0,
+              voterGroups,policyCredibility,institutionalTrust,fiscalImpactPct:0,policyEffects:{},agenda:buildCampaignAgenda(),issueIndex:0,currentIssue:CAMPAIGN_ISSUES[0].id,decisions:[],
               scheduledDate:state.nextElectionDate,firstElection:false,round:Number(state.electionsWon||1)+1
             };
             electionStarted=true;
