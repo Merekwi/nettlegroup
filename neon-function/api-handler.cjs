@@ -448,6 +448,8 @@ async function main(req,res,forcedPath) {
         if (won) {
           state.phase="government";
           state.electionsWon=Number(state.electionsWon||0)+1;
+          state.parliament={totalSeats:250,governmentSeats:Number(clampNumber(voteShare+crypto.randomInt(-8,9),25,80).toFixed(1)),oppositionSeats:0,lastVote:null};
+          state.parliament.oppositionSeats=Number((100-state.parliament.governmentSeats).toFixed(1));
           state.nextElectionDate=election.firstElection ? (Number(state.startYear||2026)+4)+"-01-01" : (() => { const d=new Date(String(electionDate).slice(0,10)+"T00:00:00Z"); d.setUTCFullYear(d.getUTCFullYear()+4); return d.toISOString().slice(0,10); })();
           state.approval=clampNumber(Number(state.approval||50)+4,0,100);
           state.policyMandate={status:"active",monthsElapsed:0,durationMonths:12,effects:election.policyEffects||{},fiscalImpactPct:Number(election.fiscalImpactPct||0),decisions:election.decisions||[]};
@@ -1032,6 +1034,10 @@ async function main(req,res,forcedPath) {
         currentIssue:CAMPAIGN_ISSUES[0].id,decisions:[],scheduledDate:yearDate,firstElection:true,round:1
       };
       state.election.oppositionSupport=Number((100-state.election.candidateSupport).toFixed(1));
+      state.constitution={version:1,articles:DEFAULT_CONSTITUTION_ARTICLES.map(item=>({...item})),proposals:[],history:[]};
+      state.parliament={totalSeats:250,governmentSeats:Number(clampNumber(50+(state.approval-45)*0.30+crypto.randomInt(-5,6),30,72).toFixed(1)),oppositionSeats:0,lastVote:null};
+      state.parliament.oppositionSeats=Number((100-state.parliament.governmentSeats).toFixed(1));
+      state.referendums=[];
       const cabinetPools = {
         AR:["Lucía Fernández","Mateo González","Valentina Rodríguez","Santiago López","Camila Martínez"],
         AU:["Olivia Williams","Jack Thompson","Charlotte Wilson","Noah Harris","Amelia Martin"],
