@@ -55,8 +55,8 @@ jobs:
       - name: Install project dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Test PostgreSQL date normalization
-        run: node --test neon-function/date-utils.test.cjs
+      - name: Test date and minister balance rules
+        run: node --test neon-function/date-utils.test.cjs neon-function/minister-balance.test.cjs
 
       - name: Install official Neon CLI binary
         shell: bash

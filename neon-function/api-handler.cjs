@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 const { Pool } = require("pg");
 const { isoDate } = require("./date-utils.cjs");
+const { createMinisterProfile } = require("./minister-balance.cjs");
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL && !/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? { rejectUnauthorized: true } : undefined,
@@ -730,7 +731,12 @@ async function main(req,res,forcedPath) {
         presidentialPool.query("SELECT id,game_date,event_type,headline,article,severity,effects FROM game_events WHERE save_id=$1 ORDER BY game_date DESC,created_at DESC LIMIT 12",[game.id]),
         presidentialPool.query("SELECT id,decree_number,title,summary,body,status,effects,created_at,published_at FROM decrees WHERE save_id=$1 ORDER BY decree_number DESC LIMIT 12",[game.id])
       ]);
-      return out(res,200,{game,ministers:ministers.rows,relations:relations.rows,units:units.rows,events:events.rows,decrees:decrees.rows});
+      const displayedMinisters=ministers.rows.map(minister=>({
+        ...minister,
+        competence:clampNumber(Number(minister.competence??60),40,85),
+        loyalty:clampNumber(Number(minister.loyalty??60),35,85)
+      }));
+      return out(res,200,{game,ministers:displayedMinisters,relations:relations.rows,units:units.rows,events:events.rows,decrees:decrees.rows});
     }
 
     if (path === "/api/presidential/game/program" && req.method === "POST") {
@@ -847,16 +853,18 @@ async function main(req,res,forcedPath) {
         for (const minister of ministers.rows) {
           const traits=minister.traits&&typeof minister.traits==="object"?minister.traits:{};
           const effects=traits.effects&&typeof traits.effects==="object"?traits.effects:{};
-          const competenceFactor=0.45+Number(minister.competence||50)/100;
-          const loyaltyFactor=Number(minister.loyalty||50)<25?0.45:1;
+          const competence=clampNumber(Number(minister.competence??60),40,85);
+          const loyalty=clampNumber(Number(minister.loyalty??60),35,85);
+          const competenceFactor=0.65+competence/200;
+          const loyaltyFactor=loyalty<50?0.85:1;
           for (const [key,value] of Object.entries(effects)) {
             if (Object.prototype.hasOwnProperty.call(ministerEffects,key) && Number.isFinite(Number(value))) {
               ministerEffects[key]+=Number(value)*competenceFactor*loyaltyFactor;
             }
           }
-          if (Number(minister.loyalty||50)<25) {
-            ministerEffects.corruption+=0.12;
-            ministerEffects.stability-=0.10;
+          if (loyalty<40) {
+            ministerEffects.corruption+=0.04;
+            ministerEffects.stability-=0.04;
           }
         }
         const randomEvents=[
@@ -941,24 +949,6 @@ async function main(req,res,forcedPath) {
       if (!gameUser) return out(res,401,{error:"authentication_required"});
       const input=await readBody(req), action=txt(input.action,32);
       const portfolios=["Финансы","Иностранные дела","Оборона","Экономика","Здравоохранение","Образование","Внутренние дела"];
-      const archetypes={
-        technocrat:{label:"Технократ",effects:{gdpGrowth:0.08,inflation:-0.025}},
-        reformer:{label:"Реформатор",effects:{publicServices:0.13,approval:0.11,stability:-0.03}},
-        diplomat:{label:"Дипломат",effects:{stability:0.07,approval:0.06}},
-        hardliner:{label:"Силовик",effects:{stability:0.15,approval:-0.08,corruption:0.04}},
-        populist:{label:"Популист",effects:{approval:0.24,stability:-0.06,budgetBalance:-0.08}},
-        oligarch:{label:"Связи с бизнесом",effects:{gdpGrowth:0.12,corruption:0.18,approval:-0.10}},
-        incompetent:{label:"Некомпетентный",effects:{gdpGrowth:-0.10,corruption:0.14,stability:-0.06}}
-      };
-      const portfolioEffects={
-        "Финансы":{inflation:-0.04,budgetBalance:0.04},
-        "Иностранные дела":{gdpGrowth:0.03,stability:0.03},
-        "Оборона":{militaryPower:0.16,stability:0.08},
-        "Экономика":{gdpGrowth:0.11,unemployment:-0.05},
-        "Здравоохранение":{healthcare:0.18,approval:0.08},
-        "Образование":{education:0.16,gdpGrowth:0.03},
-        "Внутренние дела":{stability:0.10,corruption:-0.08}
-      };
       if (!["appoint","dismiss"].includes(action)) return out(res,400,{error:"invalid_minister_action"});
       const client=await presidentialPool.connect();
       try {
@@ -970,23 +960,17 @@ async function main(req,res,forcedPath) {
         let headline,article,minister;
         if (action==="appoint") {
           const name=txt(input.name,100), portfolio=txt(input.portfolio,80), age=Number(input.age);
-          const competence=Number(input.competence), loyalty=Number(input.loyalty);
-          const archetype=txt(input.archetype,32), portraitId=txt(input.portraitId,4);
+          const portraitId=txt(input.portraitId,4);
           if (name.length<3||!portfolios.includes(portfolio)||!Number.isInteger(age)||age<25||age>90||
-              !Number.isInteger(competence)||competence<20||competence>100||!Number.isInteger(loyalty)||loyalty<20||loyalty>100||
-              !archetypes[archetype]||!/^p(0[1-9]|1[0-6])$/.test(portraitId)) {
+              !/^p(0[1-9]|1[0-6])$/.test(portraitId)) {
             await client.query("ROLLBACK");
             return out(res,400,{error:"invalid_minister_details"});
           }
           const occupied=await client.query("SELECT id FROM ministers WHERE save_id=$1 AND portfolio=$2 AND dismissed_at IS NULL",[game.id,portfolio]);
           if (occupied.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"portfolio_already_filled"}); }
-          const effects={...portfolioEffects[portfolio],...archetypes[archetype].effects};
-          for (const key of Object.keys(effects)) {
-            if (portfolioEffects[portfolio]&&Object.prototype.hasOwnProperty.call(portfolioEffects[portfolio],key)&&archetypes[archetype].effects[key]!==undefined) {
-              effects[key]=Number((portfolioEffects[portfolio][key]+archetypes[archetype].effects[key]).toFixed(3));
-            }
-          }
-          const traits={portraitId,archetype,archetypeLabel:archetypes[archetype].label,effects};
+          const profile=createMinisterProfile(portfolio,crypto.randomInt);
+          const {competence,loyalty,archetype,traits:profileTraits}=profile;
+          const traits={...profileTraits,portraitId};
           const inserted=await client.query(
             "INSERT INTO ministers(save_id,portfolio,full_name,age,competence,loyalty,approval,traits) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING id,portfolio,full_name,age,competence,loyalty,approval,traits",
             [game.id,portfolio,name,age,competence,loyalty,crypto.randomInt(42,81),JSON.stringify(traits)]
@@ -994,7 +978,7 @@ async function main(req,res,forcedPath) {
           minister=inserted.rows[0];
           state.stability=clampNumber(Number(state.stability||50)+(loyalty-50)*0.012,0,100);
           headline="Президент назначил нового министра";
-          article=name+" возглавил(а) направление «"+portfolio+"». Специализация: "+archetypes[archetype].label+". Компетентность: "+competence+"/100, лояльность: "+loyalty+"/100.";
+          article=name+" возглавил(а) направление «"+portfolio+"». Специализация: "+traits.archetypeLabel+". Компетентность: "+competence+"/100, лояльность: "+loyalty+"/100.";
         } else {
           const ministerId=txt(input.ministerId,64);
           if (!/^[0-9a-f-]{36}$/i.test(ministerId)) { await client.query("ROLLBACK"); return out(res,400,{error:"invalid_minister_id"}); }
