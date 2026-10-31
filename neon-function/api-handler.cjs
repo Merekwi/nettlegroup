@@ -1596,8 +1596,16 @@ async function main(req,res,forcedPath) {
         debt:base("debt",55),taxRate:base("taxRate",22),education:base("education",55),
         healthcare:base("healthcare",58),infrastructure:base("infrastructure",52),actionPoints:2,
         difficulty:difficulty,presidentPortrait:portraitId,startYear:startYear,phase:"election_campaign",
-        dictatorship:false,electionsWon:0,nextElectionDate:null,democracyIndex:base("democracyIndex",55)
+        dictatorship:false,electionsWon:0,nextElectionDate:null,democracyIndex:base("democracyIndex",55),
+        ministerPoolVersion:1
       };
+      const initialPopulation=Number(state.population||25);
+      const initialMilitaryPersonnel=
+        Math.max(12000,Math.floor(initialPopulation*1800))+
+        Math.max(2500,Math.floor(Number(state.militaryPower||40)*45))+
+        Math.max(1200,Math.floor(initialPopulation*90))+
+        Math.max(2500,Math.floor(initialPopulation*650));
+      state.military=initializeMilitaryState(initialPopulation,initialMilitaryPersonnel);
       state.treasury=Number((state.treasury*difficultyRule.treasury).toFixed(2));
       state.approval=Number(clampNumber(state.approval+difficultyRule.approval,0,100).toFixed(2));
       state.stability=Number(clampNumber(state.stability+difficultyRule.stability,0,100).toFixed(2));
@@ -1646,7 +1654,7 @@ async function main(req,res,forcedPath) {
         UA:["Олена Ковальчук","Андрій Мельник","Марія Шевченко","Максим Бондаренко","Софія Ткаченко"]
       };
       const ministerNames = cabinetPools[country.iso2] || ["Alex Morgan","Maya Patel","Daniel Novak","Sofia Martin","Noah Chen"];
-      const portfolios = ["Финансы","Иностранные дела","Оборона","Экономика","Здравоохранение"];
+      const initialPortraits=["p03","p08","p11","p05","p14"];
       const client = await presidentialPool.connect();
       try {
         await client.query("BEGIN");
@@ -1656,29 +1664,12 @@ async function main(req,res,forcedPath) {
           [gameUser.telegram_id,campaignTitle,country.id,president,age,bio,yearDate,JSON.stringify(state)]
         );
         const save = saveResult.rows[0];
-        const initialArchetypes=["technocrat","diplomat","hardliner","reformer","reformer"];
-        const initialPortraits=["p03","p08","p11","p05","p14"];
-        for (let i=0;i<portfolios.length;i++) {
-          const competence=crypto.randomInt(55,86), loyalty=crypto.randomInt(48,89);
-          const portfolioEffects={
-            "Финансы":{inflation:-0.04,budgetBalance:0.04},
-            "Иностранные дела":{gdpGrowth:0.03,stability:0.03},
-            "Оборона":{militaryPower:0.16,stability:0.08},
-            "Экономика":{gdpGrowth:0.11,unemployment:-0.05},
-            "Здравоохранение":{healthcare:0.18,approval:0.08}
-          }[portfolios[i]]||{};
-          const profileEffects={
-            technocrat:{gdpGrowth:0.08,inflation:-0.025},
-            diplomat:{stability:0.07,approval:0.06},
-            hardliner:{stability:0.15,approval:-0.08,corruption:0.04},
-            reformer:{publicServices:0.13,approval:0.11,stability:-0.03}
-          }[initialArchetypes[i]];
-          const effects={...portfolioEffects};
-          for (const [key,value] of Object.entries(profileEffects)) effects[key]=Number(((effects[key]||0)+value).toFixed(3));
-          const traits={portraitId:initialPortraits[i],archetype:initialArchetypes[i],archetypeLabel:({technocrat:"Технократ",diplomat:"Дипломат",hardliner:"Силовик",reformer:"Реформатор"})[initialArchetypes[i]],effects};
+        for (let i=0;i<ministerNames.length;i++) {
+          const profile=createMinisterProfile(crypto.randomInt);
+          const traits={...profile.traits,portraitId:initialPortraits[i]||("p"+String(i+1).padStart(2,"0"))};
           await client.query(
-            "INSERT INTO ministers(save_id,portfolio,full_name,age,competence,loyalty,approval,traits) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
-            [save.id,portfolios[i],ministerNames[i],crypto.randomInt(38,61),competence,loyalty,crypto.randomInt(42,72),JSON.stringify(traits)]
+            "INSERT INTO ministers(save_id,portfolio,full_name,age,competence,loyalty,approval,traits,is_candidate) VALUES($1,'Кандидат',$2,$3,$4,$5,$6,$7::jsonb,TRUE)",
+            [save.id,ministerNames[i],crypto.randomInt(34,66),profile.competence,profile.loyalty,crypto.randomInt(42,72),JSON.stringify(traits)]
           );
         }
         const neighbours = await client.query(
@@ -1696,17 +1687,21 @@ async function main(req,res,forcedPath) {
         }
         const population = Number(state.population || 25);
         const militaryUnits = [
-          ["Сухопутные войска",Math.max(8000,Math.round(population*2800)),67,72],
-          ["Военно-воздушные силы",Math.max(35,Math.round(Number(state.militaryPower||40)*2.4)),70,76],
-          ["Военно-морские силы",Math.max(3,Math.round(population*0.55)),64,69],
-          ["Национальная гвардия",Math.max(2500,Math.round(population*800)),68,74]
+          ["Сухопутные войска",Math.max(8000,Math.round(population*2800)),67,72,"land",Math.max(12000,Math.floor(population*1800))],
+          ["Военно-воздушные силы",Math.max(35,Math.round(Number(state.militaryPower||40)*2.4)),70,76,"air",Math.max(2500,Math.floor(Number(state.militaryPower||40)*45))],
+          ["Военно-морские силы",Math.max(3,Math.round(population*0.55)),64,69,"naval",Math.max(1200,Math.floor(population*90))],
+          ["Национальная гвардия",Math.max(2500,Math.round(population*800)),68,74,"guard",Math.max(2500,Math.floor(population*650))]
         ];
         for (const unit of militaryUnits) {
           await client.query(
-            "INSERT INTO military_units(save_id,unit_type,quantity,readiness,supply) VALUES($1,$2,$3,$4,$5)",
-            [save.id,unit[0],unit[1],unit[2],unit[3]]
+            "INSERT INTO military_units(save_id,unit_type,quantity,readiness,supply,unit_branch,active_personnel,reserve_personnel,equipment_level,experience,morale) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+            [save.id,unit[0],unit[1],unit[2],unit[3],unit[4],unit[5],unit[4]==="land"?Math.floor(state.military.manpower.trainedReserve*0.65):unit[4]==="guard"?Math.floor(state.military.manpower.trainedReserve*0.35):0,Math.max(25,unit[2]-5),Math.max(25,unit[2]-8),Math.max(35,unit[3])]
           );
         }
+        await client.query(
+          "INSERT INTO military_technologies(save_id,tech_id) SELECT $1,UNNEST($2::text[]) ON CONFLICT(save_id,tech_id) DO NOTHING",
+          [save.id,TECHNOLOGIES.map(item=>item.id)]
+        );
         const startArticle="В "+(country.name_local||country.name_en)+" начинается общенациональная избирательная кампания. Кандидат "+president+", "+age+" лет, выдвинут партией «"+state.election.partyName+"». Биография кандидата: "+background.label+". Стартовые условия: "+difficultyRule.label.toLowerCase()+".";
         await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'election_campaign',$3,$4,2,'{}'::jsonb)",[save.id,yearDate,"Партия выдвинула кандидата на общенациональные выборы",startArticle]);
         await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'campaign_created',$3::jsonb)",[
