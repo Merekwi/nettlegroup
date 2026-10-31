@@ -1001,6 +1001,13 @@ async function main(req,res,forcedPath) {
       finally{client.release();}
     }
 
+    if (path === "/api/presidential/game/military" && req.method === "POST") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const input = await readBody(req);
+      const result = await handleMilitaryAction(input, gameUser);
+      return out(res,200,result);
+    }
+
     if (path === "/api/presidential/game/current" && req.method === "GET") {
       if (!gameUser) return out(res,401,{error:"authentication_required"});
       const result = await presidentialPool.query(
