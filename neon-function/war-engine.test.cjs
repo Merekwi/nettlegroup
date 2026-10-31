@@ -66,6 +66,20 @@ test("defensive posture protects friendly forces better than an offensive postur
   assert.ok(offensive.enemyLosses > defensive.enemyLosses);
 });
 
+test("presidential written directives guide AI posture, reconnaissance and logistics", () => {
+  const war = { front_state: { territoryControl: 50, friendlyPersonnel: 60000, enemyPersonnel: 60000 } };
+  const neutral = resolveOperationalTurn({ war, friendlyPower: 100000, enemyPower: 100000, random: () => 0.5 });
+  const directed = resolveOperationalTurn({
+    war, friendlyPower: 100000, enemyPower: 100000, posture: "balanced",
+    directive: "Удерживать оборонительные рубежи, обеспечить снабжение и собрать разведданные.",
+    random: () => 0.5
+  });
+  assert.equal(directed.appliedPosture, "defensive");
+  assert.ok(directed.appliedDirective.includes("удерживать"));
+  assert.ok(directed.control > neutral.control);
+  assert.ok(directed.friendlyLosses < neutral.friendlyLosses);
+});
+
 test("operational turn updates territorial control and applies issued orders", () => {
   const war = { front_state: { territoryControl: 50, friendlyPersonnel: 50000, enemyPersonnel: 48000 } };
   const result = resolveOperationalTurn({
