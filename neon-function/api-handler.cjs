@@ -1300,8 +1300,9 @@ async function main(req,res,forcedPath) {
           activePersonnel+=recruitment.recruited;
         }
         const personnelUpkeep=activePersonnel*0.00000075*Number(military.contracts.salaryIndex||1);
-        const militaryMonthlyExpense=militaryBudget*0.38+researchExpense+personnelUpkeep+
-          recruitment.recruited*0.0000018+militaryProgramOutflow;
+        const militaryOperationsExpense=militaryBudget*0.38+researchExpense+personnelUpkeep+
+          recruitment.recruited*0.0000018;
+        const militaryMonthlyExpense=militaryOperationsExpense+militaryProgramOutflow;
         const activePatrols=await client.query(
           "SELECT COUNT(*)::int AS count FROM military_patrols WHERE save_id=$1 AND status='active'",
           [game.id]
@@ -1385,7 +1386,7 @@ async function main(req,res,forcedPath) {
         state.taxRate=Number(clampNumber(Number(state.taxRate||22)+Number(mandateEffects.taxRate||0),0,70).toFixed(2));
         const monthlyBalance=Number((gdp*((Number(state.taxRate||22)-21.5)/100/12)+mandateBudgetDelta).toFixed(2));
         const netBudget=Number((monthlyBalance-projectOutflow-militaryMonthlyExpense).toFixed(2));
-        state.treasury=Math.max(0,Number((calculateMonthlyTreasury(state.treasury,monthlyBalance,event.treasury,ministerEffects.budgetBalance)-militaryMonthlyExpense).toFixed(2)));
+        state.treasury=Math.max(0,Number((calculateMonthlyTreasury(state.treasury,monthlyBalance,event.treasury,ministerEffects.budgetBalance)-militaryOperationsExpense).toFixed(2)));
         state.budgetBalance=netBudget;
         state.debt=Number(clampNumber(Number(state.debt||0)+(netBudget<0?Math.abs(netBudget)/gdp*100:0)+Number(mandateEffects.debt||0),0,500).toFixed(2));
         state.democracyIndex=Number(clampNumber(Number(state.democracyIndex??55)+Number(mandateEffects.democracyIndex||0),0,100).toFixed(2));
