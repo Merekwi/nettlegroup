@@ -1011,24 +1011,97 @@ async function main(req,res,forcedPath) {
     if (path === "/api/presidential/game/current" && req.method === "GET") {
       if (!gameUser) return out(res,401,{error:"authentication_required"});
       const result = await presidentialPool.query(
-        "SELECT s.id,s.save_name,s.president_name,s.president_age,s.president_bio,s.game_date,s.turn_number,s.state,s.status,c.iso2,c.name_en,c.name_local,c.flag_emoji,c.government_type,c.region FROM game_saves s LEFT JOIN countries c ON c.id=s.country_id WHERE s.owner_user_id=$1 AND s.status='active' ORDER BY s.updated_at DESC LIMIT 1",
+        "SELECT s.id,s.owner_user_id,s.country_id,s.save_name,s.president_name,s.president_age,s.president_bio,s.game_date,s.turn_number,s.state,s.status,c.iso2,c.name_en,c.name_local,c.flag_emoji,c.government_type,c.region FROM game_saves s LEFT JOIN countries c ON c.id=s.country_id WHERE s.owner_user_id=$1 AND s.status='active' ORDER BY s.updated_at DESC LIMIT 1",
         [gameUser.telegram_id]
       );
-      const game=result.rows[0] || null;
-      if (!game) return out(res,200,{game:null,ministers:[],relations:[],units:[],events:[],decrees:[]});
-      const [ministers,relations,units,events,decrees]=await Promise.all([
-        presidentialPool.query("SELECT id,portfolio,full_name,age,competence,loyalty,approval,traits FROM ministers WHERE save_id=$1 AND dismissed_at IS NULL ORDER BY portfolio",[game.id]),
+      let game=result.rows[0] || null;
+      if (!game) return out(res,200,{game:null,ministers:[],relations:[],units:[],events:[],decrees:[],technologies:[],wars:[],patrols:[]});
+
+      let liveState={...(game.state||{})};
+      if (Number(liveState.ministerPoolVersion||0)<1) {
+        const migrationClient=await presidentialPool.connect();
+        try {
+          await migrationClient.query("BEGIN");
+          const locked=await migrationClient.query(
+            "SELECT id,state FROM game_saves WHERE id=$1 AND owner_user_id=$2 AND status='active' FOR UPDATE",
+            [game.id,game.owner_user_id]
+          );
+          if (!locked.rowCount) throw new Error("active_game_not_found");
+          const nextState={...(locked.rows[0].state||{})};
+          if (Number(nextState.ministerPoolVersion||0)<1) {
+            const legacy=await migrationClient.query(
+              "SELECT id,traits FROM ministers WHERE save_id=$1 AND dismissed_at IS NULL AND is_candidate=FALSE FOR UPDATE",
+              [game.id]
+            );
+            for (const row of legacy.rows) {
+              const profile=createMinisterProfile(crypto.randomInt);
+              const oldTraits=row.traits&&typeof row.traits==="object"&&!Array.isArray(row.traits)?row.traits:{};
+              const traits={
+                ...profile.traits,
+                portraitId:oldTraits.portraitId||"p01"
+              };
+              await migrationClient.query(
+                "UPDATE ministers SET portfolio='Кандидат',is_candidate=TRUE,competence=$1,loyalty=$2,traits=$3::jsonb WHERE id=$4",
+                [profile.competence,profile.loyalty,JSON.stringify(traits),row.id]
+              );
+            }
+            nextState.ministerPoolVersion=1;
+            await migrationClient.query(
+              "UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",
+              [JSON.stringify(nextState),game.id]
+            );
+          }
+          await migrationClient.query("COMMIT");
+          liveState=nextState;
+        } catch(error) {
+          await migrationClient.query("ROLLBACK");
+          throw error;
+        } finally {
+          migrationClient.release();
+        }
+      }
+
+      const [ministers,relations,units,events,decrees,technologies,wars,patrols]=await Promise.all([
+        presidentialPool.query("SELECT id,portfolio,full_name,age,competence,loyalty,approval,traits,is_candidate FROM ministers WHERE save_id=$1 AND dismissed_at IS NULL ORDER BY is_candidate DESC,portfolio,full_name",[game.id]),
         presidentialPool.query("SELECT d.id,d.other_country_id,d.other_country_name,d.relation_score,d.status,d.treaties,c.iso2,c.flag_emoji FROM diplomatic_relations d LEFT JOIN countries c ON c.id=d.other_country_id WHERE d.save_id=$1 ORDER BY d.relation_score DESC,d.other_country_name",[game.id]),
-        presidentialPool.query("SELECT id,unit_type,quantity,readiness,supply FROM military_units WHERE save_id=$1 ORDER BY unit_type",[game.id]),
+        presidentialPool.query("SELECT * FROM military_units WHERE save_id=$1 ORDER BY unit_branch,unit_type",[game.id]),
         presidentialPool.query("SELECT id,game_date,event_type,headline,article,severity,effects FROM game_events WHERE save_id=$1 ORDER BY game_date DESC,created_at DESC LIMIT 12",[game.id]),
-        presidentialPool.query("SELECT id,decree_number,title,summary,body,status,effects,created_at,published_at FROM decrees WHERE save_id=$1 ORDER BY decree_number DESC LIMIT 12",[game.id])
+        presidentialPool.query("SELECT id,decree_number,title,summary,body,status,effects,created_at,published_at FROM decrees WHERE save_id=$1 ORDER BY decree_number DESC LIMIT 12",[game.id]),
+        presidentialPool.query("SELECT save_id,tech_id,level,research_points,is_researching,updated_at FROM military_technologies WHERE save_id=$1 ORDER BY tech_id",[game.id]),
+        presidentialPool.query("SELECT w.*,c.iso2 AS opponent_iso2,c.flag_emoji AS opponent_flag FROM military_wars w LEFT JOIN countries c ON c.id=w.opponent_country_id WHERE w.save_id=$1 ORDER BY w.created_at DESC LIMIT 10",[game.id]),
+        presidentialPool.query("SELECT p.*,u.unit_type,u.unit_branch FROM military_patrols p JOIN military_units u ON u.id=p.unit_id WHERE p.save_id=$1 ORDER BY p.created_at DESC LIMIT 30",[game.id])
       ]);
+
+      if (!technologies.rowCount) {
+        await presidentialPool.query(
+          "INSERT INTO military_technologies(save_id,tech_id) SELECT $1,UNNEST($2::text[]) ON CONFLICT(save_id,tech_id) DO NOTHING",
+          [game.id,TECHNOLOGIES.map(item=>item.id)]
+        );
+      }
+      const technologyRows=technologies.rowCount?technologies.rows:(await presidentialPool.query(
+        "SELECT save_id,tech_id,level,research_points,is_researching,updated_at FROM military_technologies WHERE save_id=$1 ORDER BY tech_id",[game.id]
+      )).rows;
+      const activePersonnel=units.rows.reduce((sum,unit)=>sum+Number(unit.active_personnel||0),0);
+      const military=normalizeMilitaryState(liveState.military,liveState.population||1,activePersonnel);
+      military.manpower.activePersonnel=activePersonnel;
+      if (!liveState.military || Number(liveState.military.version||0)<1 || activePersonnel!==Number(liveState.military?.manpower?.activePersonnel||0)) {
+        liveState.military=military;
+        await presidentialPool.query(
+          "UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",
+          [JSON.stringify(liveState),game.id]
+        );
+      }
+      game.state=liveState;
       const displayedMinisters=ministers.rows.map(minister=>({
         ...minister,
-        competence:clampNumber(Number(minister.competence??60),40,85),
-        loyalty:clampNumber(Number(minister.loyalty??60),35,85)
+        competence:clampNumber(Number(minister.competence??60),0,100),
+        loyalty:clampNumber(Number(minister.loyalty??60),0,100)
       }));
-      return out(res,200,{game,ministers:displayedMinisters,relations:relations.rows,units:units.rows,events:events.rows,decrees:decrees.rows});
+      return out(res,200,{
+        game,ministers:displayedMinisters,relations:relations.rows,units:units.rows,
+        events:events.rows,decrees:decrees.rows,technologies:technologyRows,
+        wars:wars.rows,patrols:patrols.rows,military
+      });
     }
 
     if (path === "/api/presidential/game/program" && req.method === "POST") {
