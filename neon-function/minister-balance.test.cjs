@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createMinisterProfile } = require("./minister-balance.cjs");
+const { createMinisterProfile, calculateMonthlyTreasury } = require("./minister-balance.cjs");
 
 function sequenceRandom(values) {
   const queue = [...values];
