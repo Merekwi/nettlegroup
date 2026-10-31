@@ -2,6 +2,11 @@ const crypto = require("node:crypto");
 const { Pool } = require("pg");
 const { isoDate } = require("./date-utils.cjs");
 const { createMinisterProfile, calculateMonthlyTreasury } = require("./minister-balance.cjs");
+const {
+  TECHNOLOGIES, SERVICE_LAWS, initializeMilitaryState, normalizeMilitaryState,
+  contractRecruitmentCapacity, legalMobilizationLimit, mobilizeReserve,
+  technologyProgress, calculateCombatPower, resolveOperationalTurn
+} = require("./war-engine.cjs");
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL && !/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? { rejectUnauthorized: true } : undefined,
@@ -88,6 +93,286 @@ async function userFor(req) {
   return r.rows[0] || null;
 }
 function txt(v,n) { return typeof v === "string" ? v.trim().slice(0,n) : ""; }
+
+
+async function handleMilitaryAction(input, gameUser) {
+  const action = txt(input.action, 40);
+  const client = await presidentialPool.connect();
+  try {
+    await client.query("BEGIN");
+    const saved = await client.query(
+      "SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",
+      [gameUser.telegram_id]
+    );
+    if (!saved.rowCount) throw Object.assign(new Error("active_game_not_found"), { status: 409 });
+    const game = saved.rows[0];
+    const state = { ...(game.state || {}) };
+    if (state.phase && state.phase !== "government") {
+      throw Object.assign(new Error("Военное управление доступно после формирования правительства"), { status: 409 });
+    }
+
+    const unitRows = await client.query(
+      "SELECT * FROM military_units WHERE save_id=$1 ORDER BY unit_branch,unit_type FOR UPDATE",
+      [game.id]
+    );
+    const units = unitRows.rows;
+    const activePersonnel = units.reduce((sum, unit) => sum + Number(unit.active_personnel || 0), 0);
+    const military = normalizeMilitaryState(state.military, state.population || 1, activePersonnel);
+    military.manpower.activePersonnel = activePersonnel;
+    let result = { ok: true, action };
+
+    if (action === "service_law") {
+      const service = txt(input.service, 20);
+      if (!Object.hasOwn(SERVICE_LAWS, service)) {
+        throw Object.assign(new Error("Некорректный закон о военной службе"), { status: 400 });
+      }
+      military.laws.service = service;
+      military.manpower.availablePool = Math.max(0, legalMobilizationLimit(military) - activePersonnel);
+      result.serviceLaw = SERVICE_LAWS[service].label;
+    } else if (action === "contract_terms") {
+      military.contracts.salaryIndex = clampNumber(Number(input.salaryIndex), 0.65, 2.2);
+      military.contracts.monthlyApplicants = contractRecruitmentCapacity(military, state);
+      result.contracts = military.contracts;
+    } else if (action === "budget") {
+      military.budget.shareOfGdp = clampNumber(Number(input.shareOfGdp), 0.5, 6);
+      military.budget.researchShare = clampNumber(Number(input.researchShare), 0.02, 0.4);
+      result.budget = military.budget;
+    } else if (action === "research") {
+      const techId = txt(input.techId, 40);
+      if (!TECHNOLOGIES.some(item => item.id === techId)) {
+        throw Object.assign(new Error("Неизвестное направление военных исследований"), { status: 400 });
+      }
+      await client.query(
+        "INSERT INTO military_technologies(save_id,tech_id,is_researching) VALUES($1,$2,TRUE) ON CONFLICT(save_id,tech_id) DO UPDATE SET is_researching=TRUE,updated_at=now()",
+        [game.id, techId]
+      );
+      await client.query(
+        "UPDATE military_technologies SET is_researching=FALSE,updated_at=now() WHERE save_id=$1 AND tech_id<>$2",
+        [game.id, techId]
+      );
+      military.research.selectedTech = techId;
+      result.selectedTech = techId;
+    } else if (action === "mobilize") {
+      const requested = Math.floor(clampNumber(Number(input.personnel), 0, 500000));
+      const mobilized = mobilizeReserve(military, requested, Number(state.approval || 50));
+      const landUnit = units.find(unit => unit.unit_branch === "land") || units[0];
+      if (!landUnit) throw Object.assign(new Error("Воинские части ещё не сформированы"), { status: 409 });
+      if (mobilized.mobilized > 0) {
+        await client.query(
+          "UPDATE military_units SET active_personnel=active_personnel+$1,reserve_personnel=GREATEST(0,reserve_personnel-$1),updated_at=now() WHERE id=$2",
+          [mobilized.mobilized, landUnit.id]
+        );
+      }
+      Object.assign(military, mobilized.military);
+      result.mobilized = mobilized.mobilized;
+      result.legalRemaining = mobilized.legalRemaining;
+    } else if (action === "start_program") {
+      const programId = txt(input.programId, 32);
+      const programs = {
+        modernization: { title: "Программа модернизации армии", durationMonths: 18, upfrontPct: 0.0012, monthlyPct: 0.00022 },
+        reserve_training: { title: "Подготовка мобилизационного резерва", durationMonths: 12, upfrontPct: 0.00065, monthlyPct: 0.00012 },
+        contract_recruitment: { title: "Контрактная служба: набор и подготовка", durationMonths: 12, upfrontPct: 0.00055, monthlyPct: 0.00015 }
+      };
+      const definition = programs[programId];
+      if (!definition) throw Object.assign(new Error("Неизвестная военная государственная программа"), { status: 400 });
+      if (military.programs.some(item => item.programId === programId && item.status === "active")) {
+        throw Object.assign(new Error("Эта государственная программа уже действует"), { status: 409 });
+      }
+      if (military.programs.filter(item => item.status === "active").length >= 2) {
+        throw Object.assign(new Error("Одновременно можно вести не более двух военных программ"), { status: 409 });
+      }
+      const upfront = Number((Math.max(1, Number(state.gdp || 350)) * definition.upfrontPct).toFixed(2));
+      if (Number(state.treasury || 0) < upfront) {
+        throw Object.assign(new Error("Недостаточно средств в казне для запуска программы"), { status: 409 });
+      }
+      state.treasury = Number((Number(state.treasury || 0) - upfront).toFixed(2));
+      state.budgetBalance = Number((Number(state.budgetBalance || 0) - upfront).toFixed(2));
+      military.programs.push({
+        programId, title: definition.title, durationMonths: definition.durationMonths,
+        monthsCompleted: 0, upfrontCost: upfront, monthlyCost: Number((Math.max(1, Number(state.gdp || 350)) * definition.monthlyPct).toFixed(2)),
+        status: "active", startedAt: isoDate(game.game_date)
+      });
+      result.program = military.programs[military.programs.length - 1];
+    } else if (action === "cancel_program") {
+      const programId = txt(input.programId, 32);
+      const program = military.programs.find(item => item.programId === programId && item.status === "active");
+      if (!program) throw Object.assign(new Error("Активная военная программа не найдена"), { status: 404 });
+      program.status = "cancelled";
+      program.cancelledAt = isoDate(game.game_date);
+      result.program = program;
+    } else if (action === "create_patrol") {
+      const unitId = txt(input.unitId, 64);
+      const unit = units.find(item => item.id === unitId);
+      const route = Array.isArray(input.route) ? input.route.slice(0, 8) : [];
+      if (!unit || route.length < 2 || route.some(point =>
+        !point || !Number.isFinite(Number(point.lat)) || !Number.isFinite(Number(point.lon)) ||
+        Number(point.lat) < -90 || Number(point.lat) > 90 || Number(point.lon) < -180 || Number(point.lon) > 180
+      )) {
+        throw Object.assign(new Error("Для патруля выберите подразделение и минимум две точки маршрута"), { status: 400 });
+      }
+      const patrolName = txt(input.name, 80) || "Патрульный маршрут";
+      const patrolType = ["border", "air", "naval", "internal"].includes(input.patrolType) ? input.patrolType : "border";
+      const inserted = await client.query(
+        "INSERT INTO military_patrols(save_id,unit_id,patrol_name,patrol_type,route) VALUES($1,$2,$3,$4,$5::jsonb) RETURNING *",
+        [game.id, unitId, patrolName, patrolType, JSON.stringify(route.map(point => ({ lat: Number(point.lat), lon: Number(point.lon) })))]
+      );
+      result.patrol = inserted.rows[0];
+    } else if (action === "cancel_patrol") {
+      const patrolId = txt(input.patrolId, 64);
+      const updated = await client.query(
+        "UPDATE military_patrols SET status='paused',updated_at=now() WHERE id=$1 AND save_id=$2 AND status='active' RETURNING id",
+        [patrolId, game.id]
+      );
+      if (!updated.rowCount) throw Object.assign(new Error("Активный патруль не найден"), { status: 404 });
+    } else if (action === "start_war") {
+      const opponentId = Number(input.opponentCountryId);
+      if (!Number.isSafeInteger(opponentId) || opponentId <= 0 || opponentId === Number(game.country_id)) {
+        throw Object.assign(new Error("Выберите иностранное государство"), { status: 400 });
+      }
+      const relationship = await client.query(
+        "SELECT d.other_country_id,c.name_local,c.name_en,c.iso2,c.baseline_state FROM diplomatic_relations d JOIN countries c ON c.id=d.other_country_id WHERE d.save_id=$1 AND d.other_country_id=$2 LIMIT 1",
+        [game.id, opponentId]
+      );
+      if (!relationship.rowCount) throw Object.assign(new Error("Эта страна не входит в список известных государству стран"), { status: 404 });
+      const activeWar = await client.query("SELECT id FROM military_wars WHERE save_id=$1 AND status='active' LIMIT 1", [game.id]);
+      if (activeWar.rowCount) throw Object.assign(new Error("Уже идёт война. Сначала завершите текущий конфликт"), { status: 409 });
+      const enemy = relationship.rows[0];
+      const enemyState = enemy.baseline_state && typeof enemy.baseline_state === "object" ? enemy.baseline_state : {};
+      const enemyPopulation = Math.max(1, Number(enemyState.population || state.population || 20));
+      const enemyPersonnel = Math.floor(enemyPopulation * 1_000_000 * 0.009);
+      const frontState = {
+        territoryControl: 50,
+        friendlyPersonnel: activePersonnel,
+        enemyPersonnel,
+        friendlyLosses: 0,
+        enemyLosses: 0,
+        playerCountryIso2: game.iso2 || null,
+        enemyCountryIso2: enemy.iso2 || null,
+        enemyMilitaryPower: clampNumber(Number(enemyState.militaryPower || 45), 5, 100),
+        battleTurn: 0
+      };
+      const inserted = await client.query(
+        "INSERT INTO military_wars(save_id,opponent_country_id,opponent_country_name,war_goal,front_state,started_on) VALUES($1,$2,$3,$4,$5::jsonb,$6::date) RETURNING *",
+        [game.id, opponentId, enemy.name_local || enemy.name_en || "Иностранное государство", txt(input.warGoal, 160) || "Ограниченные военные цели", JSON.stringify(frontState), isoDate(game.game_date)]
+      );
+      result.war = inserted.rows[0];
+      await client.query(
+        "INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'military_war',$3,$4,4,$5::jsonb)",
+        [game.id, game.game_date, "Начался военный конфликт", "Государство вступило в вооружённый конфликт с "+(enemy.name_local || enemy.name_en)+". Первоначальное управление боевыми действиями передано военному штабу ИИ.", JSON.stringify({ warId: inserted.rows[0].id, opponentCountryId: opponentId })]
+      );
+    } else if (action === "war_command") {
+      const warId = txt(input.warId, 64);
+      const mode = input.commandMode === "manual" ? "manual" : "ai";
+      const posture = ["defensive", "balanced", "offensive"].includes(input.posture) ? input.posture : "balanced";
+      const updated = await client.query(
+        "UPDATE military_wars SET command_mode=$1,strategic_posture=$2,updated_at=now() WHERE id=$3 AND save_id=$4 AND status='active' RETURNING *",
+        [mode, posture, warId, game.id]
+      );
+      if (!updated.rowCount) throw Object.assign(new Error("Активная война не найдена"), { status: 404 });
+      result.war = updated.rows[0];
+    } else if (action === "issue_order") {
+      const warId = txt(input.warId, 64), unitId = txt(input.unitId, 64);
+      const orderType = txt(input.orderType, 20);
+      const targetLat = Number(input.targetLat), targetLon = Number(input.targetLon);
+      const allowedOrders = ["advance", "defend", "hold", "recon", "withdraw", "support"];
+      if (!allowedOrders.includes(orderType) || !Number.isFinite(targetLat) || !Number.isFinite(targetLon) ||
+          targetLat < -90 || targetLat > 90 || targetLon < -180 || targetLon > 180 ||
+          !units.some(unit => unit.id === unitId)) {
+        throw Object.assign(new Error("Некорректный приказ или точка на карте"), { status: 400 });
+      }
+      const war = await client.query("SELECT id FROM military_wars WHERE id=$1 AND save_id=$2 AND status='active' FOR UPDATE", [warId, game.id]);
+      if (!war.rowCount) throw Object.assign(new Error("Активная война не найдена"), { status: 404 });
+      const inserted = await client.query(
+        "INSERT INTO military_orders(war_id,unit_id,order_type,target_lat,target_lon,objective) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",
+        [warId, unitId, orderType, targetLat, targetLon, txt(input.objective, 180)]
+      );
+      await client.query("UPDATE military_wars SET command_mode='manual',updated_at=now() WHERE id=$1", [warId]);
+      result.order = inserted.rows[0];
+    } else if (action === "advance_war_turn") {
+      const warId = txt(input.warId, 64);
+      const found = await client.query(
+        "SELECT w.*,c.baseline_state FROM military_wars w LEFT JOIN countries c ON c.id=w.opponent_country_id WHERE w.id=$1 AND w.save_id=$2 AND w.status='active' FOR UPDATE OF w",
+        [warId, game.id]
+      );
+      if (!found.rowCount) throw Object.assign(new Error("Активная война не найдена"), { status: 404 });
+      const war = found.rows[0];
+      const technologies = await client.query("SELECT tech_id,level FROM military_technologies WHERE save_id=$1", [game.id]);
+      const friendlyPower = calculateCombatPower(units, technologies.rows);
+      const baseline = war.baseline_state && typeof war.baseline_state === "object" ? war.baseline_state : {};
+      const enemyPower = Math.max(1000, Number(war.front_state?.enemyPersonnel || 1) *
+        (0.78 + clampNumber(Number(baseline.militaryPower || war.front_state?.enemyMilitaryPower || 45), 5, 100) / 220));
+      const pendingOrders = await client.query("SELECT * FROM military_orders WHERE war_id=$1 AND status='queued' ORDER BY created_at", [warId]);
+      const resolution = resolveOperationalTurn({
+        war, friendlyPower, enemyPower, posture: war.strategic_posture,
+        orders: pendingOrders.rows, random: () => crypto.randomInt(0, 10001) / 10000
+      });
+      const nextFront = {
+        ...(war.front_state || {}),
+        territoryControl: resolution.control,
+        friendlyPersonnel: Math.max(0, Number(war.front_state?.friendlyPersonnel || activePersonnel) - resolution.friendlyLosses),
+        enemyPersonnel: Math.max(0, Number(war.front_state?.enemyPersonnel || 0) - resolution.enemyLosses),
+        friendlyLosses: Number(war.front_state?.friendlyLosses || 0) + resolution.friendlyLosses,
+        enemyLosses: Number(war.front_state?.enemyLosses || 0) + resolution.enemyLosses,
+        battleTurn: Number(war.front_state?.battleTurn || 0) + 1,
+        lastResult: resolution.result
+      };
+      if (resolution.friendlyLosses > 0) {
+        let remaining = resolution.friendlyLosses;
+        for (const unit of units.filter(item => item.active_personnel > 0).sort((a,b) => Number(b.active_personnel)-Number(a.active_personnel))) {
+          const loss = Math.min(remaining, Number(unit.active_personnel || 0));
+          if (loss > 0) await client.query("UPDATE military_units SET active_personnel=GREATEST(0,active_personnel-$1),updated_at=now() WHERE id=$2", [loss, unit.id]);
+          remaining -= loss;
+          if (remaining <= 0) break;
+        }
+      }
+      const terminal = resolution.control >= 95 ? "won" : resolution.control <= 5 ? "lost" : "active";
+      const report = {
+        result: resolution.result,
+        battleTurn: nextFront.battleTurn,
+        territoryControl: resolution.control,
+        friendlyLosses: resolution.friendlyLosses,
+        enemyLosses: resolution.enemyLosses,
+        friendlyPower: resolution.friendlyPower,
+        enemyPower: resolution.enemyPower
+      };
+      const updated = await client.query(
+        "UPDATE military_wars SET status=$1,turn_number=turn_number+1,front_state=$2::jsonb,last_report=$3::jsonb,ended_on=CASE WHEN $1 IN ('won','lost') THEN $4::date ELSE ended_on END,updated_at=now() WHERE id=$5 RETURNING *",
+        [terminal, JSON.stringify(nextFront), JSON.stringify(report), isoDate(game.game_date), warId]
+      );
+      if (pendingOrders.rowCount) await client.query("UPDATE military_orders SET status='executed',resolved_at=now() WHERE war_id=$1 AND status='queued'", [warId]);
+      await client.query(
+        "INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'military_operation',$3,$4,3,$5::jsonb)",
+        [game.id, game.game_date, "Военный штаб: "+resolution.result, "Итог оперативного хода: контроль линии фронта "+resolution.control+"%. Потери: свои "+resolution.friendlyLosses+", противника "+resolution.enemyLosses+".", JSON.stringify(report)]
+      );
+      result.war = updated.rows[0];
+      result.report = report;
+    } else if (action === "ceasefire") {
+      const warId = txt(input.warId, 64);
+      const updated = await client.query(
+        "UPDATE military_wars SET status='ceasefire',ended_on=$1::date,updated_at=now() WHERE id=$2 AND save_id=$3 AND status='active' RETURNING *",
+        [isoDate(game.game_date), warId, game.id]
+      );
+      if (!updated.rowCount) throw Object.assign(new Error("Активная война не найдена"), { status: 404 });
+      result.war = updated.rows[0];
+    } else {
+      throw Object.assign(new Error("Неизвестное военное распоряжение"), { status: 400 });
+    }
+
+    state.military = military;
+    await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2", [JSON.stringify(state), game.id]);
+    await client.query(
+      "INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,$3,$4::jsonb)",
+      [gameUser.id, game.id, "military_"+action, JSON.stringify({ action, warId: result.war?.id || input.warId || null })]
+    );
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
 
 function clampNumber(value, min, max) {
   const n = Number(value);
