@@ -1324,39 +1324,42 @@ async function main(req,res,forcedPath) {
         if (state.phase && state.phase!=="government") { await client.query("ROLLBACK"); return out(res,409,{error:"election_campaign_in_progress"}); }
         let headline,article,minister;
         if (action==="appoint") {
-          const name=txt(input.name,100), portfolio=txt(input.portfolio,80), age=Number(input.age);
-          const portraitId=txt(input.portraitId,4);
-          if (name.length<3||!portfolios.includes(portfolio)||!Number.isInteger(age)||age<25||age>90||
-              !/^p(0[1-9]|1[0-6])$/.test(portraitId)) {
+          const candidateId=txt(input.candidateId,64), portfolio=txt(input.portfolio,80);
+          if (!/^[0-9a-f-]{36}$/i.test(candidateId)||!portfolios.includes(portfolio)) {
             await client.query("ROLLBACK");
-            return out(res,400,{error:"invalid_minister_details"});
+            return out(res,400,{error:"invalid_candidate_or_mandate"});
           }
-          const occupied=await client.query("SELECT id FROM ministers WHERE save_id=$1 AND portfolio=$2 AND dismissed_at IS NULL",[game.id,portfolio]);
-          if (occupied.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"portfolio_already_filled"}); }
-          const profile=createMinisterProfile(portfolio,crypto.randomInt);
-          const {competence,loyalty,archetype,traits:profileTraits}=profile;
-          const traits={...profileTraits,portraitId};
-          const inserted=await client.query(
-            "INSERT INTO ministers(save_id,portfolio,full_name,age,competence,loyalty,approval,traits) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING id,portfolio,full_name,age,competence,loyalty,approval,traits",
-            [game.id,portfolio,name,age,competence,loyalty,crypto.randomInt(42,81),JSON.stringify(traits)]
+          const occupied=await client.query(
+            "SELECT id FROM ministers WHERE save_id=$1 AND portfolio=$2 AND dismissed_at IS NULL AND is_candidate=FALSE",
+            [game.id,portfolio]
           );
-          minister=inserted.rows[0];
-          state.stability=clampNumber(Number(state.stability||50)+(loyalty-50)*0.012,0,100);
-          headline="Президент назначил нового министра";
-          article=name+" возглавил(а) направление «"+portfolio+"». Специализация: "+traits.archetypeLabel+". Компетентность: "+competence+"/100, лояльность: "+loyalty+"/100.";
+          if (occupied.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"portfolio_already_filled"}); }
+          const appointed=await client.query(
+            "UPDATE ministers SET portfolio=$1,is_candidate=FALSE,appointed_at=now() WHERE id=$2 AND save_id=$3 AND is_candidate=TRUE AND dismissed_at IS NULL RETURNING id,portfolio,full_name,age,competence,loyalty,approval,traits,is_candidate",
+            [portfolio,candidateId,game.id]
+          );
+          if (!appointed.rowCount) { await client.query("ROLLBACK"); return out(res,404,{error:"minister_candidate_not_found"}); }
+          minister=appointed.rows[0];
+          const traits=minister.traits&&typeof minister.traits==="object"?minister.traits:{};
+          const specialization=Array.isArray(traits.specializations)?traits.specializations:[];
+          headline="Президент назначил министра";
+          article=minister.full_name+" получил(а) мандат министра "+portfolio+". Компетентность: "+minister.competence+"/100, лояльность: "+minister.loyalty+"/100. Сильные стороны кандидата: "+specialization.join(", ")+".";
         } else {
           const ministerId=txt(input.ministerId,64);
           if (!/^[0-9a-f-]{36}$/i.test(ministerId)) { await client.query("ROLLBACK"); return out(res,400,{error:"invalid_minister_id"}); }
-          const removed=await client.query("UPDATE ministers SET dismissed_at=now() WHERE id=$1 AND save_id=$2 AND dismissed_at IS NULL RETURNING id,portfolio,full_name,loyalty",[ministerId,game.id]);
+          const removed=await client.query(
+            "UPDATE ministers SET dismissed_at=now() WHERE id=$1 AND save_id=$2 AND dismissed_at IS NULL AND is_candidate=FALSE RETURNING id,portfolio,full_name,loyalty",
+            [ministerId,game.id]
+          );
           if (!removed.rowCount) { await client.query("ROLLBACK"); return out(res,404,{error:"minister_not_found"}); }
           minister=removed.rows[0];
-          state.stability=clampNumber(Number(state.stability||50)-0.35,0,100);
-          state.approval=clampNumber(Number(state.approval||50)+(Number(minister.loyalty)<40?0.4:-0.2),0,100);
+          state.stability=clampNumber(Number(state.stability||50)-0.25,0,100);
           headline="В правительстве произошла отставка";
-          article=minister.full_name+" покинул(а) пост министра («"+minister.portfolio+"»). Президенту предстоит назначить нового руководителя.";
+          article=minister.full_name+" покинул(а) пост министра («"+minister.portfolio+"»). Вакантный мандат можно передать другому кандидату из кадрового резерва.";
         }
+        state.ministerPoolVersion=1;
         await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2",[JSON.stringify(state),game.id]);
-        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'government',$3,$4,2,$5::jsonb)",[game.id,game.game_date,headline,article,JSON.stringify({action,minister:minister.id})]);
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'government',$3,$4,2,$5::jsonb)",[game.id,game.game_date,headline,article,JSON.stringify({action,minister:minister.id,portfolio:minister.portfolio})]);
         await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,$3,$4::jsonb)",[gameUser.id,game.id,"minister_"+action,JSON.stringify({ministerId:minister.id,portfolio:minister.portfolio})]);
         await client.query("COMMIT");
         return out(res,200,{ok:true,minister});
