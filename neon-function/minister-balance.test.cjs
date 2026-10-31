@@ -12,8 +12,9 @@ function sequenceRandom() {
 }
 
 test("minister candidates have varied, bounded skills and non-maxed general ratings", () => {
-  const first = createMinisterProfile(sequenceRandom());
-  const second = createMinisterProfile(sequenceRandom());
+  const random = sequenceRandom();
+  const first = createMinisterProfile(random);
+  const second = createMinisterProfile(random);
 
   assert.deepEqual(Object.keys(first.traits.skills).sort(), Object.values(SKILLS).sort());
   for (const profile of [first, second]) {
