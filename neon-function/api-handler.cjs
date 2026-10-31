@@ -1,5 +1,6 @@
 const crypto = require("node:crypto");
 const { Pool } = require("pg");
+const { isoDate } = require("./date-utils.cjs");
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL && !/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? { rejectUnauthorized: true } : undefined,
@@ -513,7 +514,7 @@ async function main(req,res,forcedPath) {
           state.electionsWon=Number(state.electionsWon||0)+1;
           state.parliament={totalSeats:250,governmentSeats:Number(clampNumber(voteShare+crypto.randomInt(-8,9),25,80).toFixed(1)),oppositionSeats:0,lastVote:null};
           state.parliament.oppositionSeats=Number((100-state.parliament.governmentSeats).toFixed(1));
-          state.nextElectionDate=election.firstElection ? (Number(state.startYear||2026)+4)+"-01-01" : (() => { const d=new Date(String(electionDate).slice(0,10)+"T00:00:00Z"); d.setUTCFullYear(d.getUTCFullYear()+4); return d.toISOString().slice(0,10); })();
+          state.nextElectionDate=election.firstElection ? (Number(state.startYear||2026)+4)+"-01-01" : (() => { const d=new Date(isoDate(electionDate)+"T00:00:00Z"); d.setUTCFullYear(d.getUTCFullYear()+4); return d.toISOString().slice(0,10); })();
           state.approval=clampNumber(Number(state.approval||50)+4,0,100);
           state.policyMandate={status:"active",monthsElapsed:0,durationMonths:12,effects:election.policyEffects||{},fiscalImpactPct:Number(election.fiscalImpactPct||0),decisions:election.decisions||[]};
           state.democracyIndex=clampNumber(Number(state.democracyIndex??55)+(Number(election.institutionalTrust||55)-55)*0.12,0,100);
@@ -566,7 +567,7 @@ async function main(req,res,forcedPath) {
         const groups=makeConstitutionalOpinion(state,articleId);
         const proposal={
           id:crypto.randomUUID(),articleId,articleTitle:currentArticle.title,oldText:currentArticle.text,
-          proposedText,reason,status:"public_consultation",createdAt:String(game.game_date).slice(0,10),
+          proposedText,reason,status:"public_consultation",createdAt:isoDate(game.game_date),
           submittedTurn:Number(game.turn_number||0),consultationEndsTurn:Number(game.turn_number||0)+2,
           publicOpinion:groups,publicSupport:Number(opinionScore(groups).toFixed(1)),filingCost:cost
         };
@@ -629,7 +630,7 @@ async function main(req,res,forcedPath) {
         const yesShare=Number(clampNumber(opinionScore(proposal.publicOpinion||{})+crypto.randomInt(-6,7),5,95).toFixed(1));
         const turnout=Number(clampNumber(42+Number(state.stability||50)*0.18+Number(state.democracyIndex||50)*0.15-Number(state.corruption||30)*0.06+crypto.randomInt(-6,7),30,92).toFixed(1));
         const approved=turnout>=40&&yesShare>=50;
-        proposal.referendumShare=yesShare;proposal.turnout=turnout;proposal.referendumDate=String(game.game_date).slice(0,10);
+        proposal.referendumShare=yesShare;proposal.turnout=turnout;proposal.referendumDate=isoDate(game.game_date);
         proposal.status=approved?"approved":"referendum_rejected";
         if(approved){
           const article=state.constitution.articles.find(item=>item.id===proposal.articleId);
@@ -669,7 +670,7 @@ async function main(req,res,forcedPath) {
         const cost=Number((Math.max(1,Number(state.gdp||350))*0.00005).toFixed(3));
         if(Number(state.treasury||0)<cost){await client.query("ROLLBACK");return out(res,409,{error:"insufficient_treasury",required:cost,available:state.treasury});}
         const voterGroups=makeReferendumOpinion(state,topic),voteTurn=Number(game.turn_number||0)+2;
-        const referendum={id:crypto.randomUUID(),question,topic,yesLabel,noLabel,status:"campaign",createdAt:String(game.game_date).slice(0,10),openedTurn:Number(game.turn_number||0),voteTurn,voterGroups,initialYesShare:Number(opinionScore(voterGroups).toFixed(1)),filingCost:cost};
+        const referendum={id:crypto.randomUUID(),question,topic,yesLabel,noLabel,status:"campaign",createdAt:isoDate(game.game_date),openedTurn:Number(game.turn_number||0),voteTurn,voterGroups,initialYesShare:Number(opinionScore(voterGroups).toFixed(1)),filingCost:cost};
         state.referendums.push(referendum);state.actionPoints-=1;
         state.treasury=Number((Number(state.treasury||0)-cost).toFixed(3));
         state.budgetBalance=Number((Number(state.budgetBalance||0)-cost).toFixed(3));
@@ -699,7 +700,7 @@ async function main(req,res,forcedPath) {
         const yesShare=Number(clampNumber(opinionScore(referendum.voterGroups||{})+crypto.randomInt(-5,6),1,99).toFixed(1));
         const turnout=Number(clampNumber(40+Number(state.stability||50)*0.2+Number(state.democracyIndex||50)*0.13-Number(state.corruption||30)*0.05+crypto.randomInt(-6,7),30,92).toFixed(1));
         const approved=turnout>=40&&yesShare>=50;
-        referendum.yesShare=yesShare;referendum.turnout=turnout;referendum.resultDate=String(game.game_date).slice(0,10);
+        referendum.yesShare=yesShare;referendum.turnout=turnout;referendum.resultDate=isoDate(game.game_date);
         referendum.status=turnout<40?"invalid":approved?"approved":"referendum_rejected";
         state.actionPoints-=1;
         if(turnout>=40)state.approval=clampNumber(Number(state.approval||50)+(approved?0.7:-0.5),0,100);
@@ -761,7 +762,7 @@ async function main(req,res,forcedPath) {
           if (Number(state.treasury||0)<upfront) { await client.query("ROLLBACK"); return out(res,409,{error:"insufficient_treasury",required:upfront,available:state.treasury}); }
           state.treasury=Number((Number(state.treasury)-upfront).toFixed(2));
           state.budgetBalance=Number((Number(state.budgetBalance||0)-upfront).toFixed(2));
-          const project={projectId,title:definition.title,category:definition.category,durationMonths:definition.months,monthsCompleted:0,upfrontCost:upfront,monthlyCost:Math.max(0.01,Number((Number(state.gdp||350)*definition.monthlyPct).toFixed(2))),effects:definition.effects,status:"active",startedAt:String(game.game_date).slice(0,10)};
+          const project={projectId,title:definition.title,category:definition.category,durationMonths:definition.months,monthsCompleted:0,upfrontCost:upfront,monthlyCost:Math.max(0.01,Number((Number(state.gdp||350)*definition.monthlyPct).toFixed(2))),effects:definition.effects,status:"active",startedAt:isoDate(game.game_date)};
           projects.push(project);
           state.projects=projects;
           state.actionPoints=points-1;
@@ -770,7 +771,7 @@ async function main(req,res,forcedPath) {
           const project=projects.find(item=>item.projectId===projectId&&item.status==="active");
           if (!project) { await client.query("ROLLBACK"); return out(res,404,{error:"active_program_not_found"}); }
           project.status="cancelled";
-          project.cancelledAt=String(game.game_date).slice(0,10);
+          project.cancelledAt=isoDate(game.game_date);
           state.projects=projects;
           state.actionPoints=points-1;
           await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'government_program',$3,$4,2,$5::jsonb)",[game.id,game.game_date,"Государственная программа остановлена","Программа «"+project.title+"» отменена. Уже понесённые расходы не возвращаются.",JSON.stringify({projectId,monthsCompleted:project.monthsCompleted})]);
@@ -829,7 +830,7 @@ async function main(req,res,forcedPath) {
           }
           if(project.monthsCompleted>=Number(project.durationMonths||1)){
             project.status="completed";
-            project.completedAt=String(game.game_date).slice(0,10);
+            project.completedAt=isoDate(game.game_date);
           }
         }
         state.projects=activeProjects;
@@ -888,10 +889,10 @@ async function main(req,res,forcedPath) {
         state.corruption=Number(clampNumber(Number(state.corruption||30)+ministerEffects.corruption+projectEffects.corruption+Number(mandateEffects.corruption||0),0,100).toFixed(2));
         state.actionPoints=2;
         const updated=await client.query("UPDATE game_saves SET state=$1::jsonb,turn_number=turn_number+1,game_date=game_date+interval '1 month',updated_at=now() WHERE id=$2 RETURNING id,game_date,turn_number,state",[JSON.stringify(state),game.id]);
-        const newDate=String(updated.rows[0].game_date).slice(0,10);
+        const newDate=isoDate(updated.rows[0].game_date);
         let electionStarted=false;
         if (!state.dictatorship && state.nextElectionDate) {
-          const triggerDate=new Date(String(state.nextElectionDate).slice(0,10)+"T00:00:00Z");
+          const triggerDate=new Date(isoDate(state.nextElectionDate)+"T00:00:00Z");
           triggerDate.setUTCMonth(triggerDate.getUTCMonth()-3);
           if (new Date(newDate+"T00:00:00Z")>=triggerDate) {
             const voterGroups=createVoterGroups(Number(state.approval||45),0);
@@ -1040,7 +1041,7 @@ async function main(req,res,forcedPath) {
           if(talks&&talks.status==="open"){await client.query("ROLLBACK");return out(res,409,{error:"talks_already_open"});}
           cost=costFor(0.000025);
           if(Number(state.treasury||0)<cost){await client.query("ROLLBACK");return out(res,409,{error:"insufficient_treasury"});}
-          talks={status:"open",openedTurn:Number(game.turn_number),openedAt:String(game.game_date).slice(0,10)};
+          talks={status:"open",openedTurn:Number(game.turn_number),openedAt:isoDate(game.game_date)};
           proposal=null;
           headline="Открыты дипломатические консультации с "+relation.other_country_name;
           article="Стороны согласовали повестку переговоров. Консультации не означают автоматического улучшения отношений: дальнейший результат зависит от условий и позиции партнёра.";
@@ -1050,7 +1051,7 @@ async function main(req,res,forcedPath) {
           cost=costFor(action==="propose_trade"?0.00005:0.00008);
           if(Number(state.treasury||0)<cost){await client.query("ROLLBACK");return out(res,409,{error:"insufficient_treasury"});}
           const type=action==="propose_trade"?"trade":"security";
-          proposal={type,status:"pending",proposedTurn:Number(game.turn_number),replyTurn:Number(game.turn_number)+2,proposedAt:String(game.game_date).slice(0,10)};
+          proposal={type,status:"pending",proposedTurn:Number(game.turn_number),replyTurn:Number(game.turn_number)+2,proposedAt:isoDate(game.game_date)};
           headline=type==="trade"?"Предложено торговое соглашение":"Предложен договор о сотрудничестве в сфере безопасности";
           article="Предложение передано правительству "+relation.other_country_name+". Ответ ожидается после двух игровых месяцев. До ратификации соглашение не оказывает экономического или военного эффекта.";
         } else if(action==="resolve_proposal"){
@@ -1063,7 +1064,7 @@ async function main(req,res,forcedPath) {
           const accepted=crypto.randomInt(1,101)<=chance;
           if(accepted){
             const monthlyEffects=type==="trade"?{gdpGrowth:0.035,inflation:-0.008}:{stability:0.025};
-            const deal={type,status:"active",signedAt:String(game.game_date).slice(0,10),monthlyEffects};
+            const deal={type,status:"active",signedAt:isoDate(game.game_date),monthlyEffects};
             pack.activeDeals=[...(Array.isArray(pack.activeDeals)?pack.activeDeals:[]),deal];
             score=clampNumber(score+(type==="trade"?5:3),-100,100);
             headline=type==="trade"?"Подписано торговое соглашение":"Подписан договор о сотрудничестве в сфере безопасности";
@@ -1167,7 +1168,7 @@ async function main(req,res,forcedPath) {
           paused:false,
           sourceDecreeId:decreeId,
           decreeNumber:d.rows[0].decree_number,
-          startedAt:String(game.game_date).slice(0,10)
+          startedAt:isoDate(game.game_date)
         };
         projects.push(project);
         state.projects=projects;
