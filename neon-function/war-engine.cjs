@@ -159,8 +159,10 @@ function resolveOperationalTurn({ war, friendlyPower, enemyPower, posture = "bal
   const enemy = Math.max(1, Number(enemyPower || 1) * defenseFactor * (asksRecon ? 0.985 : 1) * (asksLogistics ? 0.99 : 1) * (0.94 + random() * 0.12));
   const balance = friendly / (friendly + enemy);
   const control = clamp(Number(war?.front_state?.territoryControl ?? 50) + (balance - 0.5) * 12, 0, 100);
-  const friendlyLosses = Math.max(0, Math.round(Math.min(0.006, 0.0015 + (enemy / friendly) * 0.001) * Number(war?.front_state?.friendlyPersonnel || 0)));
-  const enemyLosses = Math.max(0, Math.round(Math.min(0.007, 0.0015 + (friendly / enemy) * 0.0012) * Number(war?.front_state?.enemyPersonnel || 0)));
+  const friendlyLossPosture = chosenPosture === "defensive" ? 0.78 : chosenPosture === "offensive" ? 1.12 : 1;
+  const enemyLossPosture = chosenPosture === "offensive" ? 1.18 : chosenPosture === "defensive" ? 0.88 : 1;
+  const friendlyLosses = Math.max(0, Math.round(Math.min(0.006, (0.0015 + (enemy / friendly) * 0.001) * friendlyLossPosture) * Number(war?.front_state?.friendlyPersonnel || 0)));
+  const enemyLosses = Math.max(0, Math.round(Math.min(0.007, (0.0015 + (friendly / enemy) * 0.0012) * enemyLossPosture) * Number(war?.front_state?.enemyPersonnel || 0)));
   const result = control >= 95 ? "victory" : control <= 5 ? "defeat" : balance > 0.56 ? "initiative" : balance < 0.44 ? "pressure" : "stalemate";
   return {
     control: Number(control.toFixed(1)),
