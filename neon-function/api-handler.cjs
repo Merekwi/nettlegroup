@@ -1035,7 +1035,7 @@ async function main(req,res,forcedPath) {
           const nextState={...(locked.rows[0].state||{})};
           if (Number(nextState.ministerPoolVersion||0)<1) {
             const legacy=await migrationClient.query(
-              "SELECT id,traits FROM ministers WHERE save_id=$1 AND dismissed_at IS NULL AND is_candidate=FALSE FOR UPDATE",
+              "SELECT id,competence,loyalty,traits FROM ministers WHERE save_id=$1 AND dismissed_at IS NULL AND is_candidate=FALSE FOR UPDATE",
               [game.id]
             );
             for (const row of legacy.rows) {
@@ -1046,8 +1046,8 @@ async function main(req,res,forcedPath) {
                 portraitId:oldTraits.portraitId||"p01"
               };
               await migrationClient.query(
-                "UPDATE ministers SET portfolio='Кандидат',is_candidate=TRUE,competence=$1,loyalty=$2,traits=$3::jsonb WHERE id=$4",
-                [profile.competence,profile.loyalty,JSON.stringify(traits),row.id]
+                "UPDATE ministers SET portfolio='Кандидат',is_candidate=TRUE,traits=$1::jsonb WHERE id=$2",
+                [JSON.stringify(traits),row.id]
               );
             }
             nextState.ministerPoolVersion=1;
