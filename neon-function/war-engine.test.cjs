@@ -56,6 +56,16 @@ test("combat power uses personnel, readiness, supply and technology", () => {
   assert.equal(calculateCombatPower([], []), 0);
 });
 
+test("defensive posture protects friendly forces better than an offensive posture", () => {
+  const war = { front_state: { territoryControl: 50, friendlyPersonnel: 60000, enemyPersonnel: 60000 } };
+  const random = () => 0.5;
+  const defensive = resolveOperationalTurn({ war, friendlyPower: 100000, enemyPower: 100000, posture: "defensive", random });
+  const offensive = resolveOperationalTurn({ war, friendlyPower: 100000, enemyPower: 100000, posture: "offensive", random });
+  assert.ok(defensive.control > 50);
+  assert.ok(defensive.friendlyLosses < offensive.friendlyLosses);
+  assert.ok(offensive.enemyLosses > defensive.enemyLosses);
+});
+
 test("operational turn updates territorial control and applies issued orders", () => {
   const war = { front_state: { territoryControl: 50, friendlyPersonnel: 50000, enemyPersonnel: 48000 } };
   const result = resolveOperationalTurn({
