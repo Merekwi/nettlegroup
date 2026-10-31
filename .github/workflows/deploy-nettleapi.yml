@@ -56,7 +56,7 @@ jobs:
         run: npm install --no-audit --no-fund
 
       - name: Test date and minister balance rules
-        run: node --test neon-function/date-utils.test.cjs neon-function/minister-balance.test.cjs
+        run: node --test neon-function/date-utils.test.cjs neon-function/minister-balance.test.cjs neon-function/war-engine.test.cjs
 
       - name: Install official Neon CLI binary
         shell: bash
