@@ -42,7 +42,7 @@ test("only laws that allow conscription can mobilize trained reserve", () => {
 });
 
 test("research points complete exactly one technology level at a time", () => {
-  const result = technologyProgress({ level: 1, research_points: 75 }, 40);
+  const result = technologyProgress({ level: 1, research_points: 175 }, 40);
   assert.deepEqual(result, { level: 2, researchPoints: 15, completed: true, pointsToNext: 285 });
   assert.equal(TECHNOLOGIES.length, 9);
 });
