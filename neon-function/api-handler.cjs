@@ -264,9 +264,10 @@ async function handleMilitaryAction(input, gameUser) {
       const warId = txt(input.warId, 64);
       const mode = input.commandMode === "manual" ? "manual" : "ai";
       const posture = ["defensive", "balanced", "offensive"].includes(input.posture) ? input.posture : "balanced";
+      const directive = txt(input.directive, 1200);
       const updated = await client.query(
-        "UPDATE military_wars SET command_mode=$1,strategic_posture=$2,updated_at=now() WHERE id=$3 AND save_id=$4 AND status='active' RETURNING *",
-        [mode, posture, warId, game.id]
+        "UPDATE military_wars SET command_mode=$1,strategic_posture=$2,commander_directive=$3,updated_at=now() WHERE id=$4 AND save_id=$5 AND status='active' RETURNING *",
+        [mode, posture, directive, warId, game.id]
       );
       if (!updated.rowCount) throw Object.assign(new Error("Активная война не найдена"), { status: 404 });
       result.war = updated.rows[0];
@@ -304,7 +305,8 @@ async function handleMilitaryAction(input, gameUser) {
       const pendingOrders = await client.query("SELECT * FROM military_orders WHERE war_id=$1 AND status='queued' ORDER BY created_at", [warId]);
       const resolution = resolveOperationalTurn({
         war, friendlyPower, enemyPower, posture: war.strategic_posture,
-        orders: pendingOrders.rows, random: () => crypto.randomInt(0, 10001) / 10000
+        directive: war.commander_directive || "", orders: pendingOrders.rows,
+        random: () => crypto.randomInt(0, 10001) / 10000
       });
       const nextFront = {
         ...(war.front_state || {}),
@@ -1338,7 +1340,8 @@ async function main(req,res,forcedPath) {
             (0.78+clampNumber(Number(baseline.militaryPower||war.front_state?.enemyMilitaryPower||45),5,100)/220));
           const resolution=resolveOperationalTurn({
             war,friendlyPower,enemyPower,posture:war.strategic_posture,
-            orders:[],random:()=>crypto.randomInt(0,10001)/10000
+            directive:war.commander_directive||"",orders:[],
+            random:()=>crypto.randomInt(0,10001)/10000
           });
           const front={
             ...(war.front_state||{}),
