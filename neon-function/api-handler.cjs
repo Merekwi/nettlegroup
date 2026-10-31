@@ -1,7 +1,7 @@
 const crypto = require("node:crypto");
 const { Pool } = require("pg");
 const { isoDate } = require("./date-utils.cjs");
-const { createMinisterProfile } = require("./minister-balance.cjs");
+const { createMinisterProfile, calculateMonthlyTreasury } = require("./minister-balance.cjs");
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL && !/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? { rejectUnauthorized: true } : undefined,
@@ -849,7 +849,7 @@ async function main(req,res,forcedPath) {
             for(const [key,value] of Object.entries(treaty.monthlyEffects||{})) if(Object.prototype.hasOwnProperty.call(treatyEffects,key)) treatyEffects[key]+=Number(value||0);
           }
         }
-        const ministerEffects={gdpGrowth:0,inflation:0,unemployment:0,approval:0,stability:0,corruption:0,publicServices:0,education:0,healthcare:0,infrastructure:0,militaryPower:0};
+        const ministerEffects={gdpGrowth:0,inflation:0,unemployment:0,approval:0,stability:0,corruption:0,publicServices:0,education:0,healthcare:0,infrastructure:0,militaryPower:0,budgetBalance:0};
         for (const minister of ministers.rows) {
           const traits=minister.traits&&typeof minister.traits==="object"?minister.traits:{};
           const effects=traits.effects&&typeof traits.effects==="object"?traits.effects:{};
@@ -882,7 +882,7 @@ async function main(req,res,forcedPath) {
         state.taxRate=Number(clampNumber(Number(state.taxRate||22)+Number(mandateEffects.taxRate||0),0,70).toFixed(2));
         const monthlyBalance=Number((gdp*((Number(state.taxRate||22)-21.5)/100/12)+mandateBudgetDelta).toFixed(2));
         const netBudget=Number((monthlyBalance-projectOutflow).toFixed(2));
-        state.treasury=Number(Math.max(0,Number(state.treasury||0)+monthlyBalance+event.treasury+ministerEffects.budgetBalance*0.05).toFixed(2));
+        state.treasury=calculateMonthlyTreasury(state.treasury,monthlyBalance,event.treasury,ministerEffects.budgetBalance);
         state.budgetBalance=netBudget;
         state.debt=Number(clampNumber(Number(state.debt||0)+(netBudget<0?Math.abs(netBudget)/gdp*100:0)+Number(mandateEffects.debt||0),0,500).toFixed(2));
         state.democracyIndex=Number(clampNumber(Number(state.democracyIndex??55)+Number(mandateEffects.democracyIndex||0),0,100).toFixed(2));

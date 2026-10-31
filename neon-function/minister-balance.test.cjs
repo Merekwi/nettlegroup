@@ -39,3 +39,8 @@ test("minister specializations keep portfolio effects small and readable", () =>
 test("unknown minister portfolios are rejected", () => {
   assert.throws(() => createMinisterProfile("Несуществующее министерство", () => 0), /Unknown minister portfolio/);
 });
+
+test("monthly treasury calculation treats a missing minister budget effect as zero", () => {
+  assert.equal(calculateMonthlyTreasury(89.5, 29.71, 0, undefined), 119.21);
+  assert.equal(calculateMonthlyTreasury(null, 29.71, -0.1, NaN), 29.61);
+});

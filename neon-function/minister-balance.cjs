@@ -39,4 +39,13 @@ function createMinisterProfile(portfolio, randomInt) {
   };
 }
 
-module.exports = { createMinisterProfile };
+function calculateMonthlyTreasury(currentTreasury, monthlyBalance, eventTreasury, ministerBudgetEffect = 0) {
+  const safe = value => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : 0;
+  };
+  const total = safe(currentTreasury) + safe(monthlyBalance) + safe(eventTreasury) + safe(ministerBudgetEffect) * 0.05;
+  return Number(Math.max(0, total).toFixed(2));
+}
+
+module.exports = { createMinisterProfile, calculateMonthlyTreasury };
