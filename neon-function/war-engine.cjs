@@ -141,8 +141,9 @@ function calculateCombatPower(units, technologies = []) {
 }
 
 function resolveOperationalTurn({ war, friendlyPower, enemyPower, posture = "balanced", orders = [], random = Math.random }) {
-  const attackFactor = posture === "offensive" ? 1.12 : posture === "defensive" ? 0.92 : 1;
-  const defenseFactor = posture === "defensive" ? 1.13 : posture === "offensive" ? 0.91 : 1;
+  const attackFactor = posture === "offensive" ? 1.12 : posture === "defensive" ? 0.94 : 1;
+  // Defensive posture improves friendly force protection and reduces enemy pressure.
+  const defenseFactor = posture === "defensive" ? 0.88 : posture === "offensive" ? 1.08 : 1;
   const orderFactor = (orders || []).reduce((sum, item) => {
     if (item.status !== "queued") return sum;
     return sum + (item.order_type === "advance" ? 0.025 : item.order_type === "defend" ? 0.02 : item.order_type === "recon" ? 0.01 : 0);
