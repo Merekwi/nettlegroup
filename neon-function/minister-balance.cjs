@@ -59,7 +59,12 @@ function roundEffects(effects) {
  * Build a candidate independently from any ministry. The president chooses
  * the candidate's mandate later; only that mandate's effects are active.
  */
-function createMinisterProfile(randomInt) {
+function createMinisterProfile(randomIntOrLegacyPortfolio, legacyRandomInt) {
+  // The second argument keeps the currently deployed API backward compatible
+  // while it transitions from "create by portfolio" to a free candidate pool.
+  const randomInt = typeof randomIntOrLegacyPortfolio === "function"
+    ? randomIntOrLegacyPortfolio
+    : legacyRandomInt;
   if (typeof randomInt !== "function") {
     throw new TypeError("randomInt must be a function");
   }
