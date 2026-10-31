@@ -140,16 +140,23 @@ function calculateCombatPower(units, technologies = []) {
   }, 0);
 }
 
-function resolveOperationalTurn({ war, friendlyPower, enemyPower, posture = "balanced", orders = [], random = Math.random }) {
-  const attackFactor = posture === "offensive" ? 1.12 : posture === "defensive" ? 0.94 : 1;
+function resolveOperationalTurn({ war, friendlyPower, enemyPower, posture = "balanced", orders = [], directive = "", random = Math.random }) {
+  const text = String(directive || "").toLocaleLowerCase("ru-RU");
+  const asksToDefend = /(удерж|оборону|оборонять|не наступ|сохранить рубеж|минимизировать потери)/.test(text);
+  const asksToAdvance = /(наступ|атак|продвинуться|занять район|захватить позици)/.test(text);
+  const asksRecon = /(развед|наблюден|разведданн)/.test(text);
+  const asksLogistics = /(снабжен|логист|ремонт|перегрупп|резерв)/.test(text);
+  const chosenPosture = asksToDefend ? "defensive" : asksToAdvance ? "offensive" : posture;
+  const attackFactor = chosenPosture === "offensive" ? 1.12 : chosenPosture === "defensive" ? 0.94 : 1;
   // Defensive posture improves friendly force protection and reduces enemy pressure.
-  const defenseFactor = posture === "defensive" ? 0.88 : posture === "offensive" ? 1.08 : 1;
+  const defenseFactor = chosenPosture === "defensive" ? 0.88 : chosenPosture === "offensive" ? 1.08 : 1;
   const orderFactor = (orders || []).reduce((sum, item) => {
     if (item.status !== "queued") return sum;
     return sum + (item.order_type === "advance" ? 0.025 : item.order_type === "defend" ? 0.02 : item.order_type === "recon" ? 0.01 : 0);
   }, 0);
-  const friendly = Math.max(1, Number(friendlyPower || 1) * attackFactor * (1 + Math.min(0.1, orderFactor)) * (0.94 + random() * 0.12));
-  const enemy = Math.max(1, Number(enemyPower || 1) * defenseFactor * (0.94 + random() * 0.12));
+  const directiveFactor = (asksRecon ? 0.01 : 0) + (asksLogistics ? 0.015 : 0);
+  const friendly = Math.max(1, Number(friendlyPower || 1) * attackFactor * (1 + Math.min(0.1, orderFactor + directiveFactor)) * (0.94 + random() * 0.12));
+  const enemy = Math.max(1, Number(enemyPower || 1) * defenseFactor * (asksRecon ? 0.985 : 1) * (asksLogistics ? 0.99 : 1) * (0.94 + random() * 0.12));
   const balance = friendly / (friendly + enemy);
   const control = clamp(Number(war?.front_state?.territoryControl ?? 50) + (balance - 0.5) * 12, 0, 100);
   const friendlyLosses = Math.max(0, Math.round(Math.min(0.006, 0.0015 + (enemy / friendly) * 0.001) * Number(war?.front_state?.friendlyPersonnel || 0)));
@@ -161,7 +168,9 @@ function resolveOperationalTurn({ war, friendlyPower, enemyPower, posture = "bal
     enemyLosses,
     result,
     friendlyPower: Math.round(friendly),
-    enemyPower: Math.round(enemy)
+    enemyPower: Math.round(enemy),
+    appliedDirective: text.slice(0,240),
+    appliedPosture: chosenPosture
   };
 }
 
