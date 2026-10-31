@@ -55,7 +55,10 @@ jobs:
       - name: Install project dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Test date and minister balance rules
+      - name: Validate backend syntax
+        run: node --check neon-function/api-handler.cjs && node --check neon-function/minister-balance.cjs && node --check neon-function/war-engine.cjs
+
+      - name: Test date, minister and military simulation rules
         run: node --test neon-function/date-utils.test.cjs neon-function/minister-balance.test.cjs neon-function/war-engine.test.cjs
 
       - name: Install official Neon CLI binary
