@@ -239,7 +239,7 @@ async function handleMilitaryAction(input, gameUser) {
       const enemy = relationship.rows[0];
       const enemyState = enemy.baseline_state && typeof enemy.baseline_state === "object" ? enemy.baseline_state : {};
       const enemyPopulation = Math.max(1, Number(enemyState.population || state.population || 20));
-      const enemyPersonnel = Math.floor(enemyPopulation * 1_000_000 * 0.009);
+      const enemyPersonnel = Math.floor(enemyPopulation * 1_000_000 * 0.003);
       const frontState = {
         territoryControl: 50,
         friendlyPersonnel: activePersonnel,
@@ -358,6 +358,9 @@ async function handleMilitaryAction(input, gameUser) {
       throw Object.assign(new Error("Неизвестное военное распоряжение"), { status: 400 });
     }
 
+    const finalPersonnel=await client.query("SELECT COALESCE(SUM(active_personnel),0)::int AS total FROM military_units WHERE save_id=$1",[game.id]);
+    military.manpower.activePersonnel=Number(finalPersonnel.rows[0]?.total||0);
+    military.manpower.availablePool=Math.max(0,legalMobilizationLimit(military)-military.manpower.activePersonnel);
     state.military = military;
     await client.query("UPDATE game_saves SET state=$1::jsonb,updated_at=now() WHERE id=$2", [JSON.stringify(state), game.id]);
     await client.query(
