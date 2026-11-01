@@ -3,7 +3,8 @@ const assert = require("node:assert/strict");
 const {
   TECHNOLOGIES, SERVICE_LAWS, initializeMilitaryState, normalizeMilitaryState,
   contractRecruitmentCapacity, legalMobilizationLimit, recruitByContract,
-  mobilizeReserve, technologyProgress, calculateCombatPower, resolveOperationalTurn
+  mobilizeReserve, technologyProgress, calculateCombatPower, calculateDomainPower,
+  estimateEnemyDomainPower, chooseAiPosture, resolveOperationalTurn
 } = require("./war-engine.cjs");
 
 test("military manpower starts from population and legal service model", () => {
@@ -90,4 +91,46 @@ test("operational turn updates territorial control and applies issued orders", (
   assert.ok(result.control > 50);
   assert.ok(result.enemyLosses >= 0);
   assert.ok(["victory", "defeat", "initiative", "pressure", "stalemate"].includes(result.result));
+});
+
+test("land, aviation and naval forces contribute to separate combat domains", () => {
+  const units = [
+    { unit_branch: "land", active_personnel: 18000, quantity: 24, readiness: 70, supply: 80, equipment_level: 60, experience: 55, morale: 65 },
+    { unit_branch: "air", active_personnel: 1200, quantity: 42, readiness: 75, supply: 85, equipment_level: 72, experience: 60, morale: 70 },
+    { unit_branch: "naval", active_personnel: 900, quantity: 5, readiness: 65, supply: 75, equipment_level: 68, experience: 58, morale: 66 },
+    { unit_branch: "guard", active_personnel: 2500, quantity: 10, readiness: 70, supply: 70, equipment_level: 45, experience: 50, morale: 65 }
+  ];
+  const domains = calculateDomainPower(units, [{ tech_id: "naval", level: 2 }]);
+  assert.ok(domains.ground > 0);
+  assert.ok(domains.air > 0);
+  assert.ok(domains.naval > 0);
+  assert.equal(domains.airframes, 42);
+  assert.equal(domains.vessels, 5);
+  assert.equal(domains.totalPersonnel, 22600);
+  assert.equal(calculateCombatPower(units, [{ tech_id: "naval", level: 2 }]), domains.total);
+});
+
+test("AI headquarters changes posture using force balance, supply and presidential directives", () => {
+  const weak = { ground: 30000, air: 2000, naval: 400, total: 32000 };
+  const strongEnemy = { ground: 70000, air: 5000, naval: 1000, total: 73000 };
+  assert.equal(chooseAiPosture({ friendlyDomains: weak, enemyDomains: strongEnemy, averageSupply: 72 }).posture, "defensive");
+  const strong = { ground: 90000, air: 15000, naval: 1000, total: 97000 };
+  const weakEnemy = { ground: 50000, air: 6000, naval: 600, total: 53000 };
+  assert.equal(chooseAiPosture({ friendlyDomains: strong, enemyDomains: weakEnemy, averageSupply: 78 }).posture, "offensive");
+  assert.equal(chooseAiPosture({ friendlyDomains: strong, enemyDomains: weakEnemy, averageSupply: 30 }).posture, "defensive");
+  assert.equal(chooseAiPosture({ friendlyDomains: strong, enemyDomains: weakEnemy, averageSupply: 78, directive: "удерживать оборону" }).posture, "defensive");
+});
+
+test("air and naval superiority are reported separately by the operational model", () => {
+  const result = resolveOperationalTurn({
+    war: { front_state: { territoryControl: 50, friendlyPersonnel: 40000, enemyPersonnel: 42000 } },
+    friendlyPower: 70000, enemyPower: 65000,
+    friendlyDomains: { air: 18000, naval: 6000 },
+    enemyDomains: { air: 5000, naval: 12000 },
+    theatreType: "maritime",
+    random: () => 0.5
+  });
+  assert.ok(result.domainControl.air > 50);
+  assert.ok(result.domainControl.sea < 50);
+  assert.ok(result.control > 50);
 });
