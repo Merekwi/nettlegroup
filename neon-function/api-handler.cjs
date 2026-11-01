@@ -1053,7 +1053,7 @@ async function runCalendarClockTick(delivery) {
     const lock=await client.query("SELECT pg_try_advisory_xact_lock(hashtext('presidential-continuous-calendar')) AS acquired");
     if(!lock.rows[0]?.acquired){await client.query("COMMIT");return {ok:true,skipped:true,processed:0};}
     const due=await client.query(
-      "SELECT s.*,u.id AS game_user_id FROM game_saves s LEFT JOIN game_users u ON u.telegram_id=s.owner_user_id WHERE s.status='active' ORDER BY s.updated_at LIMIT 100 FOR UPDATE OF s SKIP LOCKED"
+      "SELECT s.*,u.id AS game_user_id FROM game_saves s LEFT JOIN game_users u ON u.telegram_id::text=s.owner_user_id WHERE s.status='active' ORDER BY s.updated_at LIMIT 100 FOR UPDATE OF s SKIP LOCKED"
     );
     let processed=0,monthTransitions=0;
     const now=new Date();
