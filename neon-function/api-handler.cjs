@@ -732,7 +732,7 @@ async function runAutonomousWarTick(delivery) {
         friendlyDomains,enemyDomains,domainControl:resolution.domainControl,
         appliedPosture:decision.posture,aiReason:decision.reason,
         appliedDirective:war.commander_directive||"",autoTickAt:at,
-        autoTickGameTime:war.game_datetime
+        autoTickGameTime:war.game_datetime instanceof Date?war.game_datetime.toISOString().slice(0,19).replace("T"," "):String(war.game_datetime||"").slice(0,19).replace("T"," ")
       };
       await client.query(
         "UPDATE military_wars SET status=$1,strategic_posture=$2,turn_number=turn_number+1,front_state=$3::jsonb,last_report=$4::jsonb,ended_on=CASE WHEN $1 IN ('won','lost') THEN $5::date ELSE ended_on END,updated_at=now() WHERE id=$6",
@@ -1096,7 +1096,7 @@ async function main(req,res,forcedPath) {
     const invocationId = String(req.headers["x-neon-trigger-invocation-id"] || "");
     if (!invocationId || invocationId !== String(delivery?.invocation_id || "") ||
         delivery?.version !== 1 || delivery?.trigger?.type !== "schedule" ||
-        delivery?.trigger?.name !== "presidential-war-ai-every-five-minutes") {
+        delivery?.trigger?.name !== "presidential-war-ai-calendar-cycle") {
       return out(res, 401, { error: "invalid_neon_trigger" });
     }
     if (!presidentialPool) return out(res, 503, { error: "presidential_database_not_configured" });
