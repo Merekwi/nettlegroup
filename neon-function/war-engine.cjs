@@ -242,10 +242,16 @@ function resolveOperationalTurn({
   const enemyLossPosture = chosenPosture === "offensive" ? 1.16 : chosenPosture === "defensive" ? 0.92 : 1;
   const friendlyLosses = Math.max(0, Math.round(Math.min(0.00072, (0.00012 + (enemy / friendly) * 0.00013) * routineIntensity * friendlyLossPosture) * Number(war?.front_state?.friendlyPersonnel || 0)));
   const enemyLosses = Math.max(0, Math.round(Math.min(0.00086, (0.00012 + (friendly / enemy) * 0.00015) * routineIntensity * enemyLossPosture) * Number(war?.front_state?.enemyPersonnel || 0)));
+  const airframes = Math.max(0, Number(friendlyDomains?.airframes || 0));
+  const vessels = Math.max(0, Number(friendlyDomains?.vessels || 0));
+  const aircraftAttrition = airframes * (0.000004 + Math.max(0, 0.5 - airControl) * 0.00012) * routineIntensity;
+  const vesselAttrition = vessels * (0.000002 + Math.max(0, 0.5 - seaControl) * 0.00008) * routineIntensity;
+  const friendlyAircraftLosses = Math.min(airframes, Math.floor(aircraftAttrition) + (random() < aircraftAttrition % 1 ? 1 : 0));
+  const friendlyVesselLosses = Math.min(vessels, Math.floor(vesselAttrition) + (random() < vesselAttrition % 1 ? 1 : 0));
   const result = control >= 95 ? "victory" : control <= 5 ? "defeat" : balance > 0.56 ? "initiative" : balance < 0.44 ? "pressure" : "stalemate";
   return {
     control: Number(control.toFixed(1)), controlDelta: Number(controlDelta.toFixed(2)),
-    friendlyLosses, enemyLosses, result,
+    friendlyLosses, enemyLosses, friendlyAircraftLosses, friendlyVesselLosses, result,
     friendlyPower: Math.round(friendly), enemyPower: Math.round(enemy),
     domainControl: { air: Number((airControl * 100).toFixed(1)), sea: Number((seaControl * 100).toFixed(1)) },
     appliedDirective: text.slice(0, 240), appliedPosture: chosenPosture
