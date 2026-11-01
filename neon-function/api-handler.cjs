@@ -1291,14 +1291,21 @@ async function main(req,res,forcedPath) {
       const technologyRows=technologies.rowCount?technologies.rows:(await presidentialPool.query(
         "SELECT save_id,tech_id,level,research_points,is_researching,updated_at FROM military_technologies WHERE save_id=$1 ORDER BY tech_id",[game.id]
       )).rows;
-      const anchor=COUNTRY_ANCHORS[String(game.iso2||"").toUpperCase()]||null;
+      const homeIso=String(game.iso2||"").toUpperCase();
+      const anchor=COUNTRY_ANCHORS[homeIso]||null;
       if(anchor){
         for(const unit of units.rows){
-          if(unit.location_lat==null||unit.location_lon==null){
-            const unitAnchor=unit.unit_branch==="naval"?(COUNTRY_COAST_ANCHORS[String(game.iso2||"").toUpperCase()]||anchor):anchor;
-            await presidentialPool.query("UPDATE military_units SET location_lat=COALESCE(location_lat,$1),location_lon=COALESCE(location_lon,$2),updated_at=now() WHERE id=$3",[unitAnchor.lat,unitAnchor.lon,unit.id]);
-            unit.location_lat=unit.location_lat==null?unitAnchor.lat:unit.location_lat;
-            unit.location_lon=unit.location_lon==null?unitAnchor.lon:unit.location_lon;
+          const navalGarrison=unit.unit_branch==="naval"&&unit.operational_status==="garrison";
+          const unitAnchor=navalGarrison?(COUNTRY_COAST_ANCHORS[homeIso]||anchor):anchor;
+          const needsCoordinate=unit.location_lat==null||unit.location_lon==null;
+          const needsNavalCoast=navalGarrison&&Math.abs(Number(unit.location_lat)-unitAnchor.lat)>.05;
+          if(needsCoordinate||needsNavalCoast){
+            await presidentialPool.query(
+              "UPDATE military_units SET location_lat=CASE WHEN $4 THEN $1 ELSE COALESCE(location_lat,$1) END,location_lon=CASE WHEN $4 THEN $2 ELSE COALESCE(location_lon,$2) END,updated_at=now() WHERE id=$3",
+              [unitAnchor.lat,unitAnchor.lon,unit.id,navalGarrison]
+            );
+            unit.location_lat=navalGarrison||unit.location_lat==null?unitAnchor.lat:unit.location_lat;
+            unit.location_lon=navalGarrison||unit.location_lon==null?unitAnchor.lon:unit.location_lon;
           }
         }
       }
