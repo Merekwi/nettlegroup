@@ -1243,9 +1243,10 @@ async function main(req,res,forcedPath) {
       if(anchor){
         for(const unit of units.rows){
           if(unit.location_lat==null||unit.location_lon==null){
-            await presidentialPool.query("UPDATE military_units SET location_lat=COALESCE(location_lat,$1),location_lon=COALESCE(location_lon,$2),updated_at=now() WHERE id=$3",[anchor.lat,anchor.lon,unit.id]);
-            unit.location_lat=unit.location_lat==null?anchor.lat:unit.location_lat;
-            unit.location_lon=unit.location_lon==null?anchor.lon:unit.location_lon;
+            const unitAnchor=unit.unit_branch==="naval"?(COUNTRY_COAST_ANCHORS[String(game.iso2||"").toUpperCase()]||anchor):anchor;
+            await presidentialPool.query("UPDATE military_units SET location_lat=COALESCE(location_lat,$1),location_lon=COALESCE(location_lon,$2),updated_at=now() WHERE id=$3",[unitAnchor.lat,unitAnchor.lon,unit.id]);
+            unit.location_lat=unit.location_lat==null?unitAnchor.lat:unit.location_lat;
+            unit.location_lon=unit.location_lon==null?unitAnchor.lon:unit.location_lon;
           }
         }
       }
@@ -1955,10 +1956,12 @@ async function main(req,res,forcedPath) {
           ["Национальная гвардия",Math.max(2500,Math.round(population*800)),68,74,"guard",Math.max(2500,Math.floor(population*650))]
         ];
         const countryAnchor=COUNTRY_ANCHORS[String(country.iso2||"").toUpperCase()]||null;
+        const coastAnchor=COUNTRY_COAST_ANCHORS[String(country.iso2||"").toUpperCase()]||countryAnchor;
         for (const unit of militaryUnits) {
+          const unitAnchor=unit[4]==="naval"?coastAnchor:countryAnchor;
           await client.query(
             "INSERT INTO military_units(save_id,unit_type,quantity,readiness,supply,unit_branch,active_personnel,reserve_personnel,equipment_level,experience,morale,location_lat,location_lon) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
-            [save.id,unit[0],unit[1],unit[2],unit[3],unit[4],unit[5],unit[4]==="land"?Math.floor(state.military.manpower.trainedReserve*0.65):unit[4]==="guard"?Math.floor(state.military.manpower.trainedReserve*0.35):0,Math.max(25,unit[2]-5),Math.max(25,unit[2]-8),Math.max(35,unit[3]),countryAnchor?.lat??null,countryAnchor?.lon??null]
+            [save.id,unit[0],unit[1],unit[2],unit[3],unit[4],unit[5],unit[4]==="land"?Math.floor(state.military.manpower.trainedReserve*0.65):unit[4]==="guard"?Math.floor(state.military.manpower.trainedReserve*0.35):0,Math.max(25,unit[2]-5),Math.max(25,unit[2]-8),Math.max(35,unit[3]),unitAnchor?.lat??null,unitAnchor?.lon??null]
           );
         }
         await client.query(
