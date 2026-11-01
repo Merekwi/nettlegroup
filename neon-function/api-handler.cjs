@@ -758,6 +758,311 @@ async function runAutonomousWarTick(delivery) {
   }
 }
 
+async function processCalendarMonth(client, game, gameUser, boundaryDate) {
+  const state={...(game.state||{})};
+        const gdp=Math.max(1,Number(state.gdp||350));
+        const previous={gdp:Number(state.gdp||350),gdpGrowth:Number(state.gdpGrowth||2),inflation:Number(state.inflation||3),unemployment:Number(state.unemployment||5),approval:Number(state.approval||50),stability:Number(state.stability||60),treasury:Number(state.treasury||0)};
+        const infrastructure=Number(state.infrastructure||52), education=Number(state.education||55), corruption=Number(state.corruption||34);
+        const mandate=state.policyMandate||null,mandateEffects={};
+        let mandateBudgetDelta=0;
+        const mandateActive=Boolean(mandate&&mandate.status==="active"&&Number(mandate.monthsElapsed||0)<Number(mandate.durationMonths||12));
+        if(mandateActive){
+          const duration=Math.max(1,Number(mandate.durationMonths||12));
+          for(const [key,total] of Object.entries(mandate.effects||{}))mandateEffects[key]=Number(total||0)/duration;
+          mandateBudgetDelta=Number((-gdp*Number(mandate.fiscalImpactPct||0)/100/duration).toFixed(2));
+          mandate.monthsElapsed=Number(mandate.monthsElapsed||0)+1;
+          if(mandate.monthsElapsed>=duration)mandate.status="completed";
+          state.policyMandate=mandate;
+        }
+        const ministers=await client.query("SELECT portfolio,competence,loyalty,traits FROM ministers WHERE save_id=$1 AND dismissed_at IS NULL AND is_candidate=FALSE",[game.id]);
+        const projectEffects={gdpGrowth:0,inflation:0,unemployment:0,approval:0,stability:0,corruption:0,publicServices:0,education:0,healthcare:0,infrastructure:0,militaryPower:0};
+        let projectOutflow=0;
+        const activeProjects=Array.isArray(state.projects)?state.projects:[];
+        for(const project of activeProjects.filter(item=>item.status==="active")){
+          const payment=Number(project.monthlyCost||0);
+          if(Number(state.treasury||0)<payment){project.paused=true;continue;}
+          project.paused=false;
+          state.treasury=Number((Number(state.treasury||0)-payment).toFixed(2));
+          projectOutflow+=payment;
+          project.monthsCompleted=Math.min(Number(project.durationMonths||1),Number(project.monthsCompleted||0)+1);
+          for(const [key,total] of Object.entries(project.effects||{})){
+            if(Object.prototype.hasOwnProperty.call(projectEffects,key)) projectEffects[key]+=Number(total)/Number(project.durationMonths||1);
+          }
+          if(project.monthsCompleted>=Number(project.durationMonths||1)){
+            project.status="completed";
+            project.completedAt=isoDate(game.game_date);
+          }
+        }
+        state.projects=activeProjects;
+        const treatyRows=await client.query("SELECT treaties FROM diplomatic_relations WHERE save_id=$1",[game.id]);
+        const treatyEffects={gdpGrowth:0,inflation:0,unemployment:0,stability:0};
+        for(const row of treatyRows.rows){
+          const pack=row.treaties&&typeof row.treaties==="object"&&!Array.isArray(row.treaties)?row.treaties:{};
+          for(const treaty of (Array.isArray(pack.activeDeals)?pack.activeDeals:Array.isArray(row.treaties)?row.treaties:[])){
+            if(treaty.status!=="active") continue;
+            for(const [key,value] of Object.entries(treaty.monthlyEffects||{})) if(Object.prototype.hasOwnProperty.call(treatyEffects,key)) treatyEffects[key]+=Number(value||0);
+          }
+        }
+        const ministerEffects={gdpGrowth:0,inflation:0,unemployment:0,approval:0,stability:0,corruption:0,publicServices:0,education:0,healthcare:0,infrastructure:0,militaryPower:0,budgetBalance:0};
+        for (const minister of ministers.rows) {
+          const traits=minister.traits&&typeof minister.traits==="object"?minister.traits:{};
+          const effectsByPortfolio=traits.effectsByPortfolio&&typeof traits.effectsByPortfolio==="object"?traits.effectsByPortfolio:{};
+          const effects=effectsByPortfolio[minister.portfolio]&&typeof effectsByPortfolio[minister.portfolio]==="object"
+            ? effectsByPortfolio[minister.portfolio]
+            : (traits.effects&&typeof traits.effects==="object"?traits.effects:{});
+          const competence=clampNumber(Number(minister.competence??60),0,100);
+          const loyalty=clampNumber(Number(minister.loyalty??60),35,85);
+          const competenceFactor=0.65+competence/200;
+          const loyaltyFactor=loyalty<50?0.85:1;
+          for (const [key,value] of Object.entries(effects)) {
+            if (Object.prototype.hasOwnProperty.call(ministerEffects,key) && Number.isFinite(Number(value))) {
+              ministerEffects[key]+=Number(value)*competenceFactor*loyaltyFactor;
+            }
+          }
+          if (loyalty<40) {
+            ministerEffects.corruption+=0.04;
+            ministerEffects.stability-=0.04;
+          }
+        }
+        // Monthly defence cycle: recruitment, readiness, funded programmes, and research.
+        const militaryUnitsResult=await client.query(
+          "SELECT * FROM military_units WHERE save_id=$1 ORDER BY unit_branch,unit_type FOR UPDATE",
+          [game.id]
+        );
+        const militaryUnits=militaryUnitsResult.rows;
+        let activePersonnel=militaryUnits.reduce((sum,unit)=>sum+Number(unit.active_personnel||0),0);
+        const military=normalizeMilitaryState(state.military,state.population||1,activePersonnel);
+        const activeMilitaryPrograms=military.programs.filter(program=>program.status==="active");
+        let militaryProgramOutflow=0;
+        for(const program of activeMilitaryPrograms){
+          const payment=Math.max(0,Number(program.monthlyCost||0));
+          if(Number(state.treasury||0)<payment){program.paused=true;continue;}
+          program.paused=false;
+          state.treasury=Number((Number(state.treasury||0)-payment).toFixed(2));
+          militaryProgramOutflow+=payment;
+          program.monthsCompleted=Math.min(Number(program.durationMonths||1),Number(program.monthsCompleted||0)+1);
+          if(program.programId==="modernization"){
+            for(const unit of militaryUnits){
+              await client.query("UPDATE military_units SET equipment_level=LEAST(95,equipment_level+0.45),readiness=LEAST(98,readiness+0.18),updated_at=now() WHERE id=$1",[unit.id]);
+              unit.equipment_level=Math.min(95,Number(unit.equipment_level||35)+0.45);
+              unit.readiness=Math.min(98,Number(unit.readiness||50)+0.18);
+            }
+          } else if(program.programId==="reserve_training"){
+            military.manpower.trainedReserve+=Math.floor(Number(military.manpower.eligiblePopulation||0)*0.0008);
+          } else if(program.programId==="contract_recruitment"){
+            military.contracts.salaryIndex=clampNumber(Number(military.contracts.salaryIndex||1)+0.015,0.65,2.2);
+          }
+          if(program.monthsCompleted>=Number(program.durationMonths||1)){
+            program.status="completed";
+            program.completedAt=isoDate(game.game_date);
+          }
+        }
+        const militaryBudget=Math.max(0,gdp*Number(military.budget.shareOfGdp||1.6)/100/12);
+        const researchExpense=militaryBudget*Number(military.budget.researchShare||0.12);
+        const selectedTech=String(military.research.selectedTech||"logistics");
+        const techRow=await client.query(
+          "SELECT * FROM military_technologies WHERE save_id=$1 AND tech_id=$2 FOR UPDATE",
+          [game.id,selectedTech]
+        );
+        let researchCompleted=null;
+        const monthlyResearchPoints=Math.floor(researchExpense*180);
+        if(techRow.rowCount&&techRow.rows[0].level<5){
+          const progress=technologyProgress(techRow.rows[0],monthlyResearchPoints);
+          await client.query(
+            "UPDATE military_technologies SET level=$1,research_points=$2,is_researching=TRUE,updated_at=now() WHERE save_id=$3 AND tech_id=$4",
+            [progress.level,progress.researchPoints,game.id,selectedTech]
+          );
+          if(progress.completed)researchCompleted={techId:selectedTech,level:progress.level};
+        }
+        const recruitmentFunding=militaryBudget*0.16;
+        const recruitment= require("./war-engine.cjs").recruitByContract(military,state,activePersonnel,recruitmentFunding);
+        Object.assign(military,recruitment.military);
+        if(recruitment.recruited>0){
+          const landUnit=militaryUnits.find(unit=>unit.unit_branch==="land")||militaryUnits[0];
+          if(landUnit){
+            await client.query(
+              "UPDATE military_units SET active_personnel=active_personnel+$1,updated_at=now() WHERE id=$2",
+              [recruitment.recruited,landUnit.id]
+            );
+            landUnit.active_personnel=Number(landUnit.active_personnel||0)+recruitment.recruited;
+          }
+          activePersonnel+=recruitment.recruited;
+        }
+        const personnelUpkeep=activePersonnel*0.00000075*Number(military.contracts.salaryIndex||1);
+        const militaryOperationsExpense=militaryBudget*0.38+researchExpense+personnelUpkeep+
+          recruitment.recruited*0.0000018;
+        const militaryMonthlyExpense=militaryOperationsExpense+militaryProgramOutflow;
+        const activePatrols=await client.query(
+          "SELECT COUNT(*)::int AS count FROM military_patrols WHERE save_id=$1 AND status='active'",
+          [game.id]
+        );
+        military.borderCoverage=Number(clampNumber(Number(military.borderCoverage||0)+Number(activePatrols.rows[0]?.count||0)*0.08,0,100).toFixed(1));
+        military.research.monthlyPoints=monthlyResearchPoints;
+        military.manpower.activePersonnel=activePersonnel;
+        military.manpower.availablePool=Math.max(0,legalMobilizationLimit(military)-activePersonnel);
+        military.lastMonth={
+          recruits:recruitment.recruited,
+          applicants:recruitment.applicants,
+          activePersonnel,
+          militaryBudget:Number(militaryBudget.toFixed(3)),
+          upkeep:Number(personnelUpkeep.toFixed(3)),
+          researchPoints:monthlyResearchPoints,
+          programOutflow:Number(militaryProgramOutflow.toFixed(3)),
+          patrols:Number(activePatrols.rows[0]?.count||0)
+        };
+
+        // Active wars advance on the independent Neon schedule, not when the president advances the calendar.
+        military.manpower.activePersonnel=militaryUnits.reduce((sum,unit)=>sum+Number(unit.active_personnel||0),0);
+        military.manpower.availablePool=Math.max(0,legalMobilizationLimit(military)-military.manpower.activePersonnel);
+        state.military=military;
+        const randomEvents=[
+          {type:"economy",headline:"Иностранные инвесторы расширяют присутствие",article:"Несколько международных компаний объявили о новых вложениях в экономику страны. Министерство экономики ожидает дополнительные рабочие места.",approval:1.2,stability:0.2,growth:0.15,treasury:0.55,inflation:0.02},
+          {type:"society",headline:"Профсоюзы требуют повышения доходов",article:"Крупные профсоюзные объединения провели переговоры с правительством. Кабинету министров предстоит найти баланс между зарплатами и инфляцией.",approval:-1.4,stability:-0.5,growth:0,treasury:-0.15,inflation:0.08},
+          {type:"economy",headline:"Центральный банк сохранил ключевую ставку",article:"Регулятор решил не менять денежно-кредитную политику и продолжить наблюдение за инфляционными рисками.",approval:0.2,stability:0.4,growth:0.02,treasury:0,inflation:-0.08},
+          {type:"politics",headline:"Оппозиция потребовала парламентских слушаний",article:"Крупнейшие оппозиционные фракции потребовали отчёта правительства. Кабинету предстоит публично объяснить результаты реформ.",approval:-0.8,stability:-0.4,growth:0,treasury:0,inflation:0},
+          {type:"diplomacy",headline:"Партнёры предложили расширить торговлю",article:"Дипломатические каналы передали предложение о расширении экономического сотрудничества. Министерство иностранных дел готовит переговорную позицию.",approval:0.5,stability:0.3,growth:0.12,treasury:0.25,inflation:0},
+          {type:"society",headline:"Правительство получило поддержку общественных организаций",article:"Общественные организации положительно оценили последние государственные программы и предложили совместные социальные проекты.",approval:1.1,stability:0.6,growth:0.02,treasury:-0.08,inflation:0},
+          {type:"crisis",headline:"Погодные условия осложнили работу инфраструктуры",article:"Неблагоприятная погода привела к локальным перебоям в транспортной системе. Региональным властям поручено восстановить движение.",approval:-0.6,stability:-0.2,growth:-0.08,treasury:-0.35,inflation:0.05},
+          {type:"politics",headline:"Аудит выявил нарушения в закупках",article:"Контрольные органы сообщили о нарушениях в нескольких государственных контрактах. Начата проверка, профильному министерству поручено представить предложения.",approval:corruption>40?-1.8:0.5,stability:-0.2,growth:-0.03,treasury:-0.1,inflation:0}
+        ];
+        const event=randomEvents[crypto.randomInt(randomEvents.length)];
+        state.gdpGrowth=clampNumber(Number(state.gdpGrowth||0)+(infrastructure-50)*0.004+(education-50)*0.002-(corruption-30)*0.001+ministerEffects.gdpGrowth+projectEffects.gdpGrowth+treatyEffects.gdpGrowth+Number(mandateEffects.gdpGrowth||0)+event.growth,-15,20);
+        state.taxRate=Number(clampNumber(Number(state.taxRate||22)+Number(mandateEffects.taxRate||0),0,70).toFixed(2));
+        const monthlyBalance=Number((gdp*((Number(state.taxRate||22)-21.5)/100/12)+mandateBudgetDelta).toFixed(2));
+        const netBudget=Number((monthlyBalance-projectOutflow-militaryMonthlyExpense).toFixed(2));
+        state.treasury=Math.max(0,Number((calculateMonthlyTreasury(state.treasury,monthlyBalance,event.treasury,ministerEffects.budgetBalance)-militaryOperationsExpense).toFixed(2)));
+        state.budgetBalance=netBudget;
+        state.debt=Number(clampNumber(Number(state.debt||0)+(netBudget<0?Math.abs(netBudget)/gdp*100:0)+Number(mandateEffects.debt||0),0,500).toFixed(2));
+        state.democracyIndex=Number(clampNumber(Number(state.democracyIndex??55)+Number(mandateEffects.democracyIndex||0),0,100).toFixed(2));
+        state.gdp=Number((gdp*(1+state.gdpGrowth/1200)).toFixed(2));
+        state.inflation=Number(clampNumber(Number(state.inflation||3)+event.inflation+(state.gdpGrowth>5?0.07:-0.02)+(Math.random()-0.5)*0.12+ministerEffects.inflation+projectEffects.inflation+treatyEffects.inflation+Number(mandateEffects.inflation||0),0,100).toFixed(2));
+        state.unemployment=Number(clampNumber(Number(state.unemployment||5)-state.gdpGrowth*0.025+0.025+(Math.random()-0.5)*0.18+ministerEffects.unemployment+projectEffects.unemployment+treatyEffects.unemployment+Number(mandateEffects.unemployment||0),0,60).toFixed(2));
+        state.approval=Number(clampNumber(Number(state.approval||50)+event.approval+(state.gdpGrowth-2)*0.16-(state.inflation-3)*0.045-(state.unemployment-5)*0.10+(Number(state.publicServices||58)-55)*0.045+ministerEffects.approval+projectEffects.approval+Number(mandateEffects.approval||0),0,100).toFixed(2));
+        state.stability=Number(clampNumber(Number(state.stability||60)+event.stability+(state.approval-50)*0.025-(corruption-35)*0.018+ministerEffects.stability+projectEffects.stability+treatyEffects.stability+Number(mandateEffects.stability||0),0,100).toFixed(2));
+        for (const key of ["publicServices","education","healthcare","infrastructure","militaryPower"]) {
+          if (ministerEffects[key]||projectEffects[key]||mandateEffects[key]) state[key]=Number(clampNumber(Number(state[key]||50)+ministerEffects[key]+projectEffects[key]+Number(mandateEffects[key]||0),0,100).toFixed(2));
+        }
+        state.corruption=Number(clampNumber(Number(state.corruption||30)+ministerEffects.corruption+projectEffects.corruption+Number(mandateEffects.corruption||0),0,100).toFixed(2));
+        const updated=await client.query("UPDATE game_saves SET state=$1::jsonb,turn_number=turn_number+1,game_date=$2::date,last_month_processed=$2::date,updated_at=now() WHERE id=$3 RETURNING id,game_date,turn_number,state",[JSON.stringify(state),boundaryDate,game.id]);
+        const newDate=isoDate(updated.rows[0].game_date);
+        let electionStarted=false;
+        if (!state.dictatorship && state.nextElectionDate) {
+          const triggerDate=new Date(isoDate(state.nextElectionDate)+"T00:00:00Z");
+          triggerDate.setUTCMonth(triggerDate.getUTCMonth()-3);
+          if (new Date(newDate+"T00:00:00Z")>=triggerDate) {
+            const voterGroups=createVoterGroups(Number(state.approval||45),0);
+            const policyCredibility=crypto.randomInt(48,64);
+            const institutionalTrust=Number(clampNumber(state.democracyIndex??55,5,95).toFixed(1));
+            const support=calculateCampaignSupport(voterGroups,policyCredibility,institutionalTrust,0);
+            state.phase="election";
+            state.election={
+              kind:state.election&&state.election.kind||"presidential",
+              type:state.election&&state.election.type||"Национальные выборы",
+              partyName:state.election&&state.election.partyName||"Партия национального развития",
+              candidateSupport:Number(support.toFixed(1)),oppositionSupport:Number((100-support).toFixed(1)),
+              voterGroups,policyCredibility,institutionalTrust,fiscalImpactPct:0,policyEffects:{},agenda:buildCampaignAgenda(),issueIndex:0,currentIssue:CAMPAIGN_ISSUES[0].id,decisions:[],
+              scheduledDate:state.nextElectionDate,firstElection:false,round:Number(state.electionsWon||1)+1
+            };
+            electionStarted=true;
+          }
+        }
+        state.lastMonthChanges={
+          gdp:Number((state.gdp-previous.gdp).toFixed(2)),
+          gdpGrowth:Number((state.gdpGrowth-previous.gdpGrowth).toFixed(2)),
+          inflation:Number((state.inflation-previous.inflation).toFixed(2)),
+          unemployment:Number((state.unemployment-previous.unemployment).toFixed(2)),
+          approval:Number((state.approval-previous.approval).toFixed(2)),
+          stability:Number((state.stability-previous.stability).toFixed(2)),
+          treasury:Number((state.treasury-previous.treasury).toFixed(2)),
+          ministerEffects,projectEffects,treatyEffects,mandateEffects,
+          policyMandate:state.policyMandate?{status:state.policyMandate.status,monthsElapsed:state.policyMandate.monthsElapsed,durationMonths:state.policyMandate.durationMonths}:null
+        };
+        await client.query("UPDATE game_saves SET state=$1::jsonb WHERE id=$2",[JSON.stringify(state),game.id]);
+        const eventHeadline=electionStarted?"До национальных выборов осталось три месяца":event.headline;
+        const eventArticle=electionStarted?"Началась предвыборная кампания. Правительству предстоит вновь получить мандат избирателей.":event.article;
+        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)",[game.id,newDate,electionStarted?"election_notice":event.type,eventHeadline,eventArticle,electionStarted?2:(event.type==="crisis"?3:2),JSON.stringify({approval:event.approval,stability:event.stability,gdpGrowth:event.growth,treasury:event.treasury,monthlyBudget:monthlyBalance,ministerEffects,electionStarted})]);
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'month_advanced',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({turn:updated.rows[0].turn_number,event:event.type,monthlyBudget:monthlyBalance,electionStarted,ministerEffects})]);
+        await client.query("COMMIT");
+
+  return {ok:true,game:{...updated.rows[0],state},event:{type:electionStarted?"election_notice":event.type,headline:eventHeadline,article:eventArticle},monthlyBudget:monthlyBalance,electionStarted,ministerEffects,lastMonthChanges:state.lastMonthChanges};
+}
+
+function gameTimestampMs(value, fallbackDate) {
+  if (value instanceof Date) return value.getTime();
+  const raw=String(value||"").trim();
+  const normalized=raw?(raw.includes("T")?raw:raw.replace(" ","T")):String(fallbackDate||"")+"T08:00:00";
+  const iso=/Z$|[+-]\d\d:\d\d$/.test(normalized)?normalized:normalized+"Z";
+  const parsed=Date.parse(iso);
+  return Number.isFinite(parsed)?parsed:Date.parse(String(fallbackDate||"")+"T08:00:00Z");
+}
+
+function gameDateOnly(value) {
+  if (value instanceof Date) return value.toISOString().slice(0,10);
+  return String(value||"").slice(0,10);
+}
+
+function nextMonthStart(value) {
+  const [year,month]=gameDateOnly(value).split("-").map(Number);
+  return new Date(Date.UTC(year,month,1)).toISOString().slice(0,10);
+}
+
+async function advanceCalendarSave(client, game, gameUser, wallNow = new Date(), speedOverride = null) {
+  const nowMs=wallNow instanceof Date?wallNow.getTime():Date.parse(wallNow);
+  const currentSpeed=[1,2,4,6,12,16].includes(Number(game.time_speed))?Number(game.time_speed):1;
+  const paused=Boolean(game.calendar_paused);
+  const lastWallMs=Date.parse(game.last_simulated_at instanceof Date?game.last_simulated_at.toISOString():String(game.last_simulated_at||""));
+  const elapsedSeconds=Number.isFinite(lastWallMs)?Math.max(0,Math.min(86400,(nowMs-lastWallMs)/1000)):0;
+  const baseGameMs=gameTimestampMs(game.game_datetime,game.game_date);
+  const targetGameMs=baseGameMs+(paused?0:elapsedSeconds*currentSpeed*60000);
+  const targetDate=new Date(targetGameMs).toISOString().slice(0,10);
+  let lastMonth=gameDateOnly(game.last_month_processed||game.game_date);
+  let processedMonths=0;
+  while(nextMonthStart(lastMonth)<=targetDate&&processedMonths<24){
+    const boundaryDate=nextMonthStart(lastMonth);
+    const periodGame={...game,game_date:lastMonth};
+    if(String((game.state||{}).phase||"government")==="government"){
+      const result=await processCalendarMonth(client,periodGame,gameUser,boundaryDate);
+      game={...game,...result.game,state:result.game.state};
+    }else{
+      const skipped=await client.query(
+        "UPDATE game_saves SET game_date=$1::date,last_month_processed=$1::date,turn_number=turn_number+1,updated_at=now() WHERE id=$2 RETURNING id,game_date,turn_number,state",
+        [boundaryDate,game.id]
+      );
+      if(skipped.rowCount)game={...game,...skipped.rows[0]};
+    }
+    lastMonth=boundaryDate;
+    processedMonths++;
+  }
+  const nextSpeed=speedOverride==null?currentSpeed:Number(speedOverride);
+  const saved=await client.query(
+    "UPDATE game_saves SET game_datetime=$1::timestamp without time zone,game_date=$2::date,last_month_processed=$3::date,last_simulated_at=$4::timestamptz,time_speed=$5,updated_at=now() WHERE id=$6 RETURNING id,game_date,game_datetime,time_speed,calendar_paused,last_simulated_at,last_month_processed,turn_number,state",
+    [new Date(targetGameMs).toISOString().slice(0,19).replace("T"," "),targetDate,lastMonth,wallNow,nextSpeed,game.id]
+  );
+  return {game:saved.rows[0],processedMonths,gameDateTime:new Date(targetGameMs).toISOString()};
+}
+
+async function runCalendarClockTick(delivery) {
+  const client=await presidentialPool.connect();
+  try{
+    await client.query("BEGIN");
+    const lock=await client.query("SELECT pg_try_advisory_xact_lock(hashtext('presidential-continuous-calendar')) AS acquired");
+    if(!lock.rows[0]?.acquired){await client.query("COMMIT");return {ok:true,skipped:true,processed:0};}
+    const due=await client.query(
+      "SELECT s.*,u.id AS game_user_id FROM game_saves s LEFT JOIN game_users u ON u.telegram_id=s.owner_user_id WHERE s.status='active' ORDER BY s.updated_at LIMIT 100 FOR UPDATE OF s SKIP LOCKED"
+    );
+    let processed=0,monthTransitions=0;
+    const now=new Date();
+    for(const game of due.rows){
+      const gameUser={id:game.game_user_id,telegram_id:game.owner_user_id};
+      const result=await advanceCalendarSave(client,game,gameUser,now);
+      processed++;monthTransitions+=result.processedMonths;
+    }
+    await client.query("COMMIT");
+    return {ok:true,processed,monthTransitions};
+  }catch(error){await client.query("ROLLBACK");throw error;}
+  finally{client.release();}
+}
+
 async function main(req,res,forcedPath) {
   const path = forcedPath || (new URL(req.url,"https://localhost").pathname.replace(/\/+$/,"") || "/");
   setCors(req,res);
@@ -765,6 +1070,18 @@ async function main(req,res,forcedPath) {
     const origins = path.startsWith("/api/presidential/") ? [process.env.SITE_ORIGIN, GAME_ORIGIN] : [process.env.SITE_ORIGIN];
     if (!req.headers.origin || !origins.includes(req.headers.origin)) return out(res,403,{error:"origin_check_failed"});
     res.statusCode=204; res.setHeader("Allow","GET, POST, PATCH, OPTIONS"); return res.end();
+  }
+
+  if (path === "/internal/game-clock-tick" && req.method === "POST") {
+    const delivery=await readBody(req);
+    const invocationId=String(req.headers["x-neon-trigger-invocation-id"]||"");
+    if(!invocationId||invocationId!==String(delivery?.invocation_id||"")||
+       delivery?.version!==1||delivery?.trigger?.type!=="schedule"||
+       delivery?.trigger?.name!=="presidential-calendar-clock-every-minute"){
+      return out(res,401,{error:"invalid_neon_trigger"});
+    }
+    if(!presidentialPool)return out(res,503,{error:"presidential_database_not_configured"});
+    return out(res,200,await runCalendarClockTick(delivery));
   }
 
   if (path === "/internal/war-ai-tick" && req.method === "POST") {
@@ -1392,244 +1709,23 @@ async function main(req,res,forcedPath) {
 
     if (path === "/api/presidential/game/advance" && req.method === "POST") {
       if (!gameUser) return out(res,401,{error:"authentication_required"});
+      return out(res,410,{error:"manual_turns_removed",message:"В симуляции используется непрерывный календарь. Измените скорость времени в панели часов."});
+    }
+
+    if (path === "/api/presidential/game/clock" && req.method === "POST") {
+      if (!gameUser) return out(res,401,{error:"authentication_required"});
+      const input=await readBody(req),speed=Number(input.speed);
+      if(![1,2,4,6,12,16].includes(speed))return out(res,400,{error:"invalid_time_speed"});
       const client=await presidentialPool.connect();
-      try {
+      try{
         await client.query("BEGIN");
         const saved=await client.query("SELECT * FROM game_saves WHERE owner_user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE",[gameUser.telegram_id]);
-        if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
-        const game=saved.rows[0], state={...(game.state||{})};
-        if (state.phase && state.phase!=="government") { await client.query("ROLLBACK"); return out(res,409,{error:"election_campaign_in_progress"}); }
-        const gdp=Math.max(1,Number(state.gdp||350));
-        const previous={gdp:Number(state.gdp||350),gdpGrowth:Number(state.gdpGrowth||2),inflation:Number(state.inflation||3),unemployment:Number(state.unemployment||5),approval:Number(state.approval||50),stability:Number(state.stability||60),treasury:Number(state.treasury||0)};
-        const infrastructure=Number(state.infrastructure||52), education=Number(state.education||55), corruption=Number(state.corruption||34);
-        const mandate=state.policyMandate||null,mandateEffects={};
-        let mandateBudgetDelta=0;
-        const mandateActive=Boolean(mandate&&mandate.status==="active"&&Number(mandate.monthsElapsed||0)<Number(mandate.durationMonths||12));
-        if(mandateActive){
-          const duration=Math.max(1,Number(mandate.durationMonths||12));
-          for(const [key,total] of Object.entries(mandate.effects||{}))mandateEffects[key]=Number(total||0)/duration;
-          mandateBudgetDelta=Number((-gdp*Number(mandate.fiscalImpactPct||0)/100/duration).toFixed(2));
-          mandate.monthsElapsed=Number(mandate.monthsElapsed||0)+1;
-          if(mandate.monthsElapsed>=duration)mandate.status="completed";
-          state.policyMandate=mandate;
-        }
-        const ministers=await client.query("SELECT portfolio,competence,loyalty,traits FROM ministers WHERE save_id=$1 AND dismissed_at IS NULL AND is_candidate=FALSE",[game.id]);
-        const projectEffects={gdpGrowth:0,inflation:0,unemployment:0,approval:0,stability:0,corruption:0,publicServices:0,education:0,healthcare:0,infrastructure:0,militaryPower:0};
-        let projectOutflow=0;
-        const activeProjects=Array.isArray(state.projects)?state.projects:[];
-        for(const project of activeProjects.filter(item=>item.status==="active")){
-          const payment=Number(project.monthlyCost||0);
-          if(Number(state.treasury||0)<payment){project.paused=true;continue;}
-          project.paused=false;
-          state.treasury=Number((Number(state.treasury||0)-payment).toFixed(2));
-          projectOutflow+=payment;
-          project.monthsCompleted=Math.min(Number(project.durationMonths||1),Number(project.monthsCompleted||0)+1);
-          for(const [key,total] of Object.entries(project.effects||{})){
-            if(Object.prototype.hasOwnProperty.call(projectEffects,key)) projectEffects[key]+=Number(total)/Number(project.durationMonths||1);
-          }
-          if(project.monthsCompleted>=Number(project.durationMonths||1)){
-            project.status="completed";
-            project.completedAt=isoDate(game.game_date);
-          }
-        }
-        state.projects=activeProjects;
-        const treatyRows=await client.query("SELECT treaties FROM diplomatic_relations WHERE save_id=$1",[game.id]);
-        const treatyEffects={gdpGrowth:0,inflation:0,unemployment:0,stability:0};
-        for(const row of treatyRows.rows){
-          const pack=row.treaties&&typeof row.treaties==="object"&&!Array.isArray(row.treaties)?row.treaties:{};
-          for(const treaty of (Array.isArray(pack.activeDeals)?pack.activeDeals:Array.isArray(row.treaties)?row.treaties:[])){
-            if(treaty.status!=="active") continue;
-            for(const [key,value] of Object.entries(treaty.monthlyEffects||{})) if(Object.prototype.hasOwnProperty.call(treatyEffects,key)) treatyEffects[key]+=Number(value||0);
-          }
-        }
-        const ministerEffects={gdpGrowth:0,inflation:0,unemployment:0,approval:0,stability:0,corruption:0,publicServices:0,education:0,healthcare:0,infrastructure:0,militaryPower:0,budgetBalance:0};
-        for (const minister of ministers.rows) {
-          const traits=minister.traits&&typeof minister.traits==="object"?minister.traits:{};
-          const effectsByPortfolio=traits.effectsByPortfolio&&typeof traits.effectsByPortfolio==="object"?traits.effectsByPortfolio:{};
-          const effects=effectsByPortfolio[minister.portfolio]&&typeof effectsByPortfolio[minister.portfolio]==="object"
-            ? effectsByPortfolio[minister.portfolio]
-            : (traits.effects&&typeof traits.effects==="object"?traits.effects:{});
-          const competence=clampNumber(Number(minister.competence??60),0,100);
-          const loyalty=clampNumber(Number(minister.loyalty??60),35,85);
-          const competenceFactor=0.65+competence/200;
-          const loyaltyFactor=loyalty<50?0.85:1;
-          for (const [key,value] of Object.entries(effects)) {
-            if (Object.prototype.hasOwnProperty.call(ministerEffects,key) && Number.isFinite(Number(value))) {
-              ministerEffects[key]+=Number(value)*competenceFactor*loyaltyFactor;
-            }
-          }
-          if (loyalty<40) {
-            ministerEffects.corruption+=0.04;
-            ministerEffects.stability-=0.04;
-          }
-        }
-        // Monthly defence cycle: recruitment, readiness, funded programmes, and research.
-        const militaryUnitsResult=await client.query(
-          "SELECT * FROM military_units WHERE save_id=$1 ORDER BY unit_branch,unit_type FOR UPDATE",
-          [game.id]
-        );
-        const militaryUnits=militaryUnitsResult.rows;
-        let activePersonnel=militaryUnits.reduce((sum,unit)=>sum+Number(unit.active_personnel||0),0);
-        const military=normalizeMilitaryState(state.military,state.population||1,activePersonnel);
-        const activeMilitaryPrograms=military.programs.filter(program=>program.status==="active");
-        let militaryProgramOutflow=0;
-        for(const program of activeMilitaryPrograms){
-          const payment=Math.max(0,Number(program.monthlyCost||0));
-          if(Number(state.treasury||0)<payment){program.paused=true;continue;}
-          program.paused=false;
-          state.treasury=Number((Number(state.treasury||0)-payment).toFixed(2));
-          militaryProgramOutflow+=payment;
-          program.monthsCompleted=Math.min(Number(program.durationMonths||1),Number(program.monthsCompleted||0)+1);
-          if(program.programId==="modernization"){
-            for(const unit of militaryUnits){
-              await client.query("UPDATE military_units SET equipment_level=LEAST(95,equipment_level+0.45),readiness=LEAST(98,readiness+0.18),updated_at=now() WHERE id=$1",[unit.id]);
-              unit.equipment_level=Math.min(95,Number(unit.equipment_level||35)+0.45);
-              unit.readiness=Math.min(98,Number(unit.readiness||50)+0.18);
-            }
-          } else if(program.programId==="reserve_training"){
-            military.manpower.trainedReserve+=Math.floor(Number(military.manpower.eligiblePopulation||0)*0.0008);
-          } else if(program.programId==="contract_recruitment"){
-            military.contracts.salaryIndex=clampNumber(Number(military.contracts.salaryIndex||1)+0.015,0.65,2.2);
-          }
-          if(program.monthsCompleted>=Number(program.durationMonths||1)){
-            program.status="completed";
-            program.completedAt=isoDate(game.game_date);
-          }
-        }
-        const militaryBudget=Math.max(0,gdp*Number(military.budget.shareOfGdp||1.6)/100/12);
-        const researchExpense=militaryBudget*Number(military.budget.researchShare||0.12);
-        const selectedTech=String(military.research.selectedTech||"logistics");
-        const techRow=await client.query(
-          "SELECT * FROM military_technologies WHERE save_id=$1 AND tech_id=$2 FOR UPDATE",
-          [game.id,selectedTech]
-        );
-        let researchCompleted=null;
-        const monthlyResearchPoints=Math.floor(researchExpense*180);
-        if(techRow.rowCount&&techRow.rows[0].level<5){
-          const progress=technologyProgress(techRow.rows[0],monthlyResearchPoints);
-          await client.query(
-            "UPDATE military_technologies SET level=$1,research_points=$2,is_researching=TRUE,updated_at=now() WHERE save_id=$3 AND tech_id=$4",
-            [progress.level,progress.researchPoints,game.id,selectedTech]
-          );
-          if(progress.completed)researchCompleted={techId:selectedTech,level:progress.level};
-        }
-        const recruitmentFunding=militaryBudget*0.16;
-        const recruitment= require("./war-engine.cjs").recruitByContract(military,state,activePersonnel,recruitmentFunding);
-        Object.assign(military,recruitment.military);
-        if(recruitment.recruited>0){
-          const landUnit=militaryUnits.find(unit=>unit.unit_branch==="land")||militaryUnits[0];
-          if(landUnit){
-            await client.query(
-              "UPDATE military_units SET active_personnel=active_personnel+$1,updated_at=now() WHERE id=$2",
-              [recruitment.recruited,landUnit.id]
-            );
-            landUnit.active_personnel=Number(landUnit.active_personnel||0)+recruitment.recruited;
-          }
-          activePersonnel+=recruitment.recruited;
-        }
-        const personnelUpkeep=activePersonnel*0.00000075*Number(military.contracts.salaryIndex||1);
-        const militaryOperationsExpense=militaryBudget*0.38+researchExpense+personnelUpkeep+
-          recruitment.recruited*0.0000018;
-        const militaryMonthlyExpense=militaryOperationsExpense+militaryProgramOutflow;
-        const activePatrols=await client.query(
-          "SELECT COUNT(*)::int AS count FROM military_patrols WHERE save_id=$1 AND status='active'",
-          [game.id]
-        );
-        military.borderCoverage=Number(clampNumber(Number(military.borderCoverage||0)+Number(activePatrols.rows[0]?.count||0)*0.08,0,100).toFixed(1));
-        military.research.monthlyPoints=monthlyResearchPoints;
-        military.manpower.activePersonnel=activePersonnel;
-        military.manpower.availablePool=Math.max(0,legalMobilizationLimit(military)-activePersonnel);
-        military.lastMonth={
-          recruits:recruitment.recruited,
-          applicants:recruitment.applicants,
-          activePersonnel,
-          militaryBudget:Number(militaryBudget.toFixed(3)),
-          upkeep:Number(personnelUpkeep.toFixed(3)),
-          researchPoints:monthlyResearchPoints,
-          programOutflow:Number(militaryProgramOutflow.toFixed(3)),
-          patrols:Number(activePatrols.rows[0]?.count||0)
-        };
-
-        // Active wars advance on the independent Neon schedule, not when the president advances the calendar.
-        military.manpower.activePersonnel=militaryUnits.reduce((sum,unit)=>sum+Number(unit.active_personnel||0),0);
-        military.manpower.availablePool=Math.max(0,legalMobilizationLimit(military)-military.manpower.activePersonnel);
-        state.military=military;
-        const randomEvents=[
-          {type:"economy",headline:"Иностранные инвесторы расширяют присутствие",article:"Несколько международных компаний объявили о новых вложениях в экономику страны. Министерство экономики ожидает дополнительные рабочие места.",approval:1.2,stability:0.2,growth:0.15,treasury:0.55,inflation:0.02},
-          {type:"society",headline:"Профсоюзы требуют повышения доходов",article:"Крупные профсоюзные объединения провели переговоры с правительством. Кабинету министров предстоит найти баланс между зарплатами и инфляцией.",approval:-1.4,stability:-0.5,growth:0,treasury:-0.15,inflation:0.08},
-          {type:"economy",headline:"Центральный банк сохранил ключевую ставку",article:"Регулятор решил не менять денежно-кредитную политику и продолжить наблюдение за инфляционными рисками.",approval:0.2,stability:0.4,growth:0.02,treasury:0,inflation:-0.08},
-          {type:"politics",headline:"Оппозиция потребовала парламентских слушаний",article:"Крупнейшие оппозиционные фракции потребовали отчёта правительства. Кабинету предстоит публично объяснить результаты реформ.",approval:-0.8,stability:-0.4,growth:0,treasury:0,inflation:0},
-          {type:"diplomacy",headline:"Партнёры предложили расширить торговлю",article:"Дипломатические каналы передали предложение о расширении экономического сотрудничества. Министерство иностранных дел готовит переговорную позицию.",approval:0.5,stability:0.3,growth:0.12,treasury:0.25,inflation:0},
-          {type:"society",headline:"Правительство получило поддержку общественных организаций",article:"Общественные организации положительно оценили последние государственные программы и предложили совместные социальные проекты.",approval:1.1,stability:0.6,growth:0.02,treasury:-0.08,inflation:0},
-          {type:"crisis",headline:"Погодные условия осложнили работу инфраструктуры",article:"Неблагоприятная погода привела к локальным перебоям в транспортной системе. Региональным властям поручено восстановить движение.",approval:-0.6,stability:-0.2,growth:-0.08,treasury:-0.35,inflation:0.05},
-          {type:"politics",headline:"Аудит выявил нарушения в закупках",article:"Контрольные органы сообщили о нарушениях в нескольких государственных контрактах. Начата проверка, профильному министерству поручено представить предложения.",approval:corruption>40?-1.8:0.5,stability:-0.2,growth:-0.03,treasury:-0.1,inflation:0}
-        ];
-        const event=randomEvents[crypto.randomInt(randomEvents.length)];
-        state.gdpGrowth=clampNumber(Number(state.gdpGrowth||0)+(infrastructure-50)*0.004+(education-50)*0.002-(corruption-30)*0.001+ministerEffects.gdpGrowth+projectEffects.gdpGrowth+treatyEffects.gdpGrowth+Number(mandateEffects.gdpGrowth||0)+event.growth,-15,20);
-        state.taxRate=Number(clampNumber(Number(state.taxRate||22)+Number(mandateEffects.taxRate||0),0,70).toFixed(2));
-        const monthlyBalance=Number((gdp*((Number(state.taxRate||22)-21.5)/100/12)+mandateBudgetDelta).toFixed(2));
-        const netBudget=Number((monthlyBalance-projectOutflow-militaryMonthlyExpense).toFixed(2));
-        state.treasury=Math.max(0,Number((calculateMonthlyTreasury(state.treasury,monthlyBalance,event.treasury,ministerEffects.budgetBalance)-militaryOperationsExpense).toFixed(2)));
-        state.budgetBalance=netBudget;
-        state.debt=Number(clampNumber(Number(state.debt||0)+(netBudget<0?Math.abs(netBudget)/gdp*100:0)+Number(mandateEffects.debt||0),0,500).toFixed(2));
-        state.democracyIndex=Number(clampNumber(Number(state.democracyIndex??55)+Number(mandateEffects.democracyIndex||0),0,100).toFixed(2));
-        state.gdp=Number((gdp*(1+state.gdpGrowth/1200)).toFixed(2));
-        state.inflation=Number(clampNumber(Number(state.inflation||3)+event.inflation+(state.gdpGrowth>5?0.07:-0.02)+(Math.random()-0.5)*0.12+ministerEffects.inflation+projectEffects.inflation+treatyEffects.inflation+Number(mandateEffects.inflation||0),0,100).toFixed(2));
-        state.unemployment=Number(clampNumber(Number(state.unemployment||5)-state.gdpGrowth*0.025+0.025+(Math.random()-0.5)*0.18+ministerEffects.unemployment+projectEffects.unemployment+treatyEffects.unemployment+Number(mandateEffects.unemployment||0),0,60).toFixed(2));
-        state.approval=Number(clampNumber(Number(state.approval||50)+event.approval+(state.gdpGrowth-2)*0.16-(state.inflation-3)*0.045-(state.unemployment-5)*0.10+(Number(state.publicServices||58)-55)*0.045+ministerEffects.approval+projectEffects.approval+Number(mandateEffects.approval||0),0,100).toFixed(2));
-        state.stability=Number(clampNumber(Number(state.stability||60)+event.stability+(state.approval-50)*0.025-(corruption-35)*0.018+ministerEffects.stability+projectEffects.stability+treatyEffects.stability+Number(mandateEffects.stability||0),0,100).toFixed(2));
-        for (const key of ["publicServices","education","healthcare","infrastructure","militaryPower"]) {
-          if (ministerEffects[key]||projectEffects[key]||mandateEffects[key]) state[key]=Number(clampNumber(Number(state[key]||50)+ministerEffects[key]+projectEffects[key]+Number(mandateEffects[key]||0),0,100).toFixed(2));
-        }
-        state.corruption=Number(clampNumber(Number(state.corruption||30)+ministerEffects.corruption+projectEffects.corruption+Number(mandateEffects.corruption||0),0,100).toFixed(2));
-        state.actionPoints=2;
-        const updated=await client.query("UPDATE game_saves SET state=$1::jsonb,turn_number=turn_number+1,game_date=game_date+interval '1 month',updated_at=now() WHERE id=$2 RETURNING id,game_date,turn_number,state",[JSON.stringify(state),game.id]);
-        const newDate=isoDate(updated.rows[0].game_date);
-        let electionStarted=false;
-        if (!state.dictatorship && state.nextElectionDate) {
-          const triggerDate=new Date(isoDate(state.nextElectionDate)+"T00:00:00Z");
-          triggerDate.setUTCMonth(triggerDate.getUTCMonth()-3);
-          if (new Date(newDate+"T00:00:00Z")>=triggerDate) {
-            const voterGroups=createVoterGroups(Number(state.approval||45),0);
-            const policyCredibility=crypto.randomInt(48,64);
-            const institutionalTrust=Number(clampNumber(state.democracyIndex??55,5,95).toFixed(1));
-            const support=calculateCampaignSupport(voterGroups,policyCredibility,institutionalTrust,0);
-            state.phase="election";
-            state.election={
-              kind:state.election&&state.election.kind||"presidential",
-              type:state.election&&state.election.type||"Национальные выборы",
-              partyName:state.election&&state.election.partyName||"Партия национального развития",
-              candidateSupport:Number(support.toFixed(1)),oppositionSupport:Number((100-support).toFixed(1)),
-              voterGroups,policyCredibility,institutionalTrust,fiscalImpactPct:0,policyEffects:{},agenda:buildCampaignAgenda(),issueIndex:0,currentIssue:CAMPAIGN_ISSUES[0].id,decisions:[],
-              scheduledDate:state.nextElectionDate,firstElection:false,round:Number(state.electionsWon||1)+1
-            };
-            electionStarted=true;
-          }
-        }
-        state.lastMonthChanges={
-          gdp:Number((state.gdp-previous.gdp).toFixed(2)),
-          gdpGrowth:Number((state.gdpGrowth-previous.gdpGrowth).toFixed(2)),
-          inflation:Number((state.inflation-previous.inflation).toFixed(2)),
-          unemployment:Number((state.unemployment-previous.unemployment).toFixed(2)),
-          approval:Number((state.approval-previous.approval).toFixed(2)),
-          stability:Number((state.stability-previous.stability).toFixed(2)),
-          treasury:Number((state.treasury-previous.treasury).toFixed(2)),
-          ministerEffects,projectEffects,treatyEffects,mandateEffects,
-          policyMandate:state.policyMandate?{status:state.policyMandate.status,monthsElapsed:state.policyMandate.monthsElapsed,durationMonths:state.policyMandate.durationMonths}:null
-        };
-        await client.query("UPDATE game_saves SET state=$1::jsonb WHERE id=$2",[JSON.stringify(state),game.id]);
-        const eventHeadline=electionStarted?"До национальных выборов осталось три месяца":event.headline;
-        const eventArticle=electionStarted?"Началась предвыборная кампания. Правительству предстоит вновь получить мандат избирателей.":event.article;
-        await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)",[game.id,newDate,electionStarted?"election_notice":event.type,eventHeadline,eventArticle,electionStarted?2:(event.type==="crisis"?3:2),JSON.stringify({approval:event.approval,stability:event.stability,gdpGrowth:event.growth,treasury:event.treasury,monthlyBudget:monthlyBalance,ministerEffects,electionStarted})]);
-        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'month_advanced',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({turn:updated.rows[0].turn_number,event:event.type,monthlyBudget:monthlyBalance,electionStarted,ministerEffects})]);
+        if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
+        const result=await advanceCalendarSave(client,saved.rows[0],gameUser,new Date(),speed);
         await client.query("COMMIT");
-        return out(res,200,{ok:true,game:{...updated.rows[0],state},event:{type:electionStarted?"election_notice":event.type,headline:eventHeadline,article:eventArticle},monthlyBudget:monthlyBalance,electionStarted,ministerEffects,lastMonthChanges:state.lastMonthChanges});
-      } catch(error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
+        return out(res,200,{ok:true,game:result.game,processedMonths:result.processedMonths});
+      }catch(error){await client.query("ROLLBACK");throw error;}
+      finally{client.release();}
     }
 
     if (path === "/api/presidential/game/minister" && req.method === "POST") {
