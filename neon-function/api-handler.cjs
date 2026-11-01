@@ -327,6 +327,8 @@ async function handleMilitaryAction(input, gameUser) {
         friendlyDomains, enemyDomains, theatreType,
         random: () => crypto.randomInt(0, 10001) / 10000
       });
+      if(resolution.friendlyAircraftLosses>0)await client.query("UPDATE military_units SET quantity=GREATEST(0,quantity-$1),updated_at=now() WHERE save_id=$2 AND unit_branch='air'",[resolution.friendlyAircraftLosses,game.id]);
+      if(resolution.friendlyVesselLosses>0)await client.query("UPDATE military_units SET quantity=GREATEST(0,quantity-$1),updated_at=now() WHERE save_id=$2 AND unit_branch='naval'",[resolution.friendlyVesselLosses,game.id]);
       const nextFront = {
         ...(war.front_state || {}),
         territoryControl: resolution.control,
@@ -337,6 +339,8 @@ async function handleMilitaryAction(input, gameUser) {
         battleTurn: Number(war.front_state?.battleTurn || 0) + 1,
         lastResult: resolution.result,
         domainControl: resolution.domainControl,
+        friendlyDomains,
+        estimatedEnemyDomains: enemyDomains,
         aiPosture: decision.posture,
         aiReason: decision.reason
       };
@@ -354,6 +358,18 @@ async function handleMilitaryAction(input, gameUser) {
           if (remaining <= 0) break;
         }
       }
+      for(const order of pendingOrders.rows){
+        const unit=units.find(item=>item.id===order.unit_id);if(!unit)continue;
+        let targetLat=Number(order.target_lat),targetLon=Number(order.target_lon);
+        if(order.order_type==="withdraw"){
+          const base=unit.unit_branch==="naval"?(COUNTRY_COAST_ANCHORS[String(game.iso2||"").toUpperCase()]||COUNTRY_ANCHORS[String(game.iso2||"").toUpperCase()]):COUNTRY_ANCHORS[String(game.iso2||"").toUpperCase()];
+          if(base){targetLat=base.lat;targetLon=base.lon;}
+        }
+        if(Number.isFinite(targetLat)&&Number.isFinite(targetLon)){
+          await client.query("UPDATE military_units SET location_lat=$1,location_lon=$2,operational_status='deployed',updated_at=now() WHERE id=$3",[targetLat,targetLon,unit.id]);
+          unit.location_lat=targetLat;unit.location_lon=targetLon;
+        }
+      }
       const terminal = resolution.control >= 95 ? "won" : resolution.control <= 5 ? "lost" : "active";
       const report = {
         result: resolution.result,
@@ -361,6 +377,8 @@ async function handleMilitaryAction(input, gameUser) {
         territoryControl: resolution.control,
         friendlyLosses: resolution.friendlyLosses,
         enemyLosses: resolution.enemyLosses,
+        friendlyAircraftLosses: resolution.friendlyAircraftLosses,
+        friendlyVesselLosses: resolution.friendlyVesselLosses,
         friendlyPower: resolution.friendlyPower,
         enemyPower: resolution.enemyPower,
         friendlyDomains,
@@ -658,8 +676,37 @@ async function runAutonomousWarTick(delivery) {
         remainingLosses-=loss;
         if(remainingLosses<=0)break;
       }
+      const homeIso=String(war.home_iso2||war.front_state?.playerCountryIso2||"").toUpperCase();
+      const enemyIso=String(war.front_state?.enemyCountryIso2||"").toUpperCase();
+      const homeAnchor=war.front_state?.homeAnchor||COUNTRY_ANCHORS[homeIso]||null;
+      const enemyAnchor=war.front_state?.enemyAnchor||COUNTRY_ANCHORS[enemyIso]||null;
+      const frontAnchor=war.front_state?.frontAnchor||COUNTRY_FRONT_ANCHORS[homeIso]?.[enemyIso]||null;
+      const homeCoastAnchor=war.front_state?.homeCoastAnchor||COUNTRY_COAST_ANCHORS[homeIso]||homeAnchor;
+      const enemyCoastAnchor=war.front_state?.enemyCoastAnchor||COUNTRY_COAST_ANCHORS[enemyIso]||enemyAnchor;
+      const movementTarget=theatreType==="land"?frontAnchor:enemyCoastAnchor;
+      if(resolution.friendlyAircraftLosses>0)await client.query("UPDATE military_units SET quantity=GREATEST(0,quantity-$1),updated_at=now() WHERE save_id=$2 AND unit_branch='air'",[resolution.friendlyAircraftLosses,war.game_id]);
+      if(resolution.friendlyVesselLosses>0)await client.query("UPDATE military_units SET quantity=GREATEST(0,quantity-$1),updated_at=now() WHERE save_id=$2 AND unit_branch='naval'",[resolution.friendlyVesselLosses,war.game_id]);
+      if(movementTarget){
+        for(const unit of units){
+          const branch=String(unit.unit_branch||"");
+          const shouldMove=theatreType==="land"?(branch==="land"||branch==="guard"):(branch==="naval");
+          if(!shouldMove)continue;
+          const currentLat=Number(unit.location_lat??(branch==="naval"?homeCoastAnchor?.lat:homeAnchor?.lat));
+          const currentLon=Number(unit.location_lon??(branch==="naval"?homeCoastAnchor?.lon:homeAnchor?.lon));
+          if(!Number.isFinite(currentLat)||!Number.isFinite(currentLon))continue;
+          const step=theatreType==="land"?0.08:0.035;
+          const nextLat=currentLat+(Number(movementTarget.lat)-currentLat)*step;
+          let deltaLon=Number(movementTarget.lon)-currentLon;
+          if(deltaLon>180)deltaLon-=360;if(deltaLon< -180)deltaLon+=360;
+          let nextLon=currentLon+deltaLon*step;
+          if(nextLon>180)nextLon-=360;if(nextLon< -180)nextLon+=360;
+          await client.query("UPDATE military_units SET location_lat=$1,location_lon=$2,operational_status='deployed',updated_at=now() WHERE id=$3",[nextLat,nextLon,unit.id]);
+          unit.location_lat=nextLat;unit.location_lon=nextLon;
+        }
+      }
       const front={
         ...(war.front_state||{}),
+        homeAnchor,enemyAnchor,frontAnchor,homeCoastAnchor,enemyCoastAnchor,
         theatreType,
         territoryControl:resolution.control,
         friendlyPersonnel:Math.max(0,Number(war.front_state?.friendlyPersonnel||friendlyDomains.totalPersonnel)-resolution.friendlyLosses),
@@ -680,6 +727,7 @@ async function runAutonomousWarTick(delivery) {
       const report={
         result:resolution.result,battleTurn:front.battleTurn,territoryControl:resolution.control,
         friendlyLosses:resolution.friendlyLosses,enemyLosses:resolution.enemyLosses,
+        friendlyAircraftLosses:resolution.friendlyAircraftLosses,friendlyVesselLosses:resolution.friendlyVesselLosses,
         friendlyPower:resolution.friendlyPower,enemyPower:resolution.enemyPower,
         friendlyDomains,enemyDomains,domainControl:resolution.domainControl,
         appliedPosture:decision.posture,aiReason:decision.reason,
