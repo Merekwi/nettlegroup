@@ -952,7 +952,7 @@ async function processCalendarMonth(client, game, gameUser, boundaryDate) {
         const updated=await client.query("UPDATE game_saves SET state=$1::jsonb,turn_number=turn_number+1,game_date=$2::date,last_month_processed=$2::date,updated_at=now() WHERE id=$3 RETURNING id,game_date,turn_number,state",[JSON.stringify(state),boundaryDate,game.id]);
         const newDate=isoDate(updated.rows[0].game_date);
         let electionStarted=false;
-        if (!state.dictatorship && state.nextElectionDate) {
+        if (state.phase!=="election" && !state.dictatorship && state.nextElectionDate) {
           const triggerDate=new Date(isoDate(state.nextElectionDate)+"T00:00:00Z");
           triggerDate.setUTCMonth(triggerDate.getUTCMonth()-3);
           if (new Date(newDate+"T00:00:00Z")>=triggerDate) {
@@ -1025,7 +1025,7 @@ async function advanceCalendarSave(client, game, gameUser, wallNow = new Date(),
   while(nextMonthStart(lastMonth)<=targetDate&&processedMonths<24){
     const boundaryDate=nextMonthStart(lastMonth);
     const periodGame={...game,game_date:lastMonth};
-    if(String((game.state||{}).phase||"government")==="government"){
+    if(["government","election","election_campaign"].includes(String((game.state||{}).phase||"government"))){
       const result=await processCalendarMonth(client,periodGame,gameUser,boundaryDate);
       game={...game,...result.game,state:result.game.state};
     }else{
