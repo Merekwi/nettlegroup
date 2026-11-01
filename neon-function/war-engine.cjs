@@ -52,10 +52,7 @@ function normalizeMilitaryState(input, populationMillions, activePersonnel = 0) 
   return {
     ...base,
     ...source,
-    laws: {
-      ...base.laws, ...laws,
-      service: Object.hasOwn(SERVICE_LAWS, laws.service) ? laws.service : base.laws.service
-    },
+    laws: { ...base.laws, ...laws, service: Object.hasOwn(SERVICE_LAWS, laws.service) ? laws.service : base.laws.service },
     manpower: { ...base.manpower, ...manpower },
     contracts: { ...base.contracts, ...contracts, salaryIndex: clamp(contracts.salaryIndex ?? 1, 0.65, 2.2) },
     budget: { ...base.budget, ...budget, shareOfGdp: clamp(budget.shareOfGdp ?? 1.6, 0.5, 6), researchShare: clamp(budget.researchShare ?? 0.12, 0.02, 0.4) },
@@ -73,7 +70,6 @@ function contractRecruitmentCapacity(military, state) {
   const unemployment = clamp(state.unemployment ?? 5, 0, 60);
   const serviceAppeal = clamp((approval * 0.45 + (100 - unemployment) * 0.25 + 50 * 0.3) / 100, 0.45, 1.05);
   const wageFactor = clamp(0.55 + wage * 0.5, 0.85, 1.65);
-  // Applicants are only people willing to sign a contract; this is not automatic conscription.
   return Math.floor(eligible * 0.000075 * serviceAppeal * wageFactor);
 }
 
@@ -89,9 +85,7 @@ function recruitByContract(military, state, activePersonnel, monthlyBudgetBillio
   const legalLimit = legalMobilizationLimit(m);
   const gap = Math.max(0, legalLimit - Number(activePersonnel || 0));
   const monthlyPayPerRecruit = 0.0000018 * clamp(m.contracts.salaryIndex, 0.65, 2.2);
-  const affordable = monthlyPayPerRecruit > 0
-    ? Math.floor(Math.max(0, monthlyBudgetBillions) / monthlyPayPerRecruit)
-    : 0;
+  const affordable = monthlyPayPerRecruit > 0 ? Math.floor(Math.max(0, monthlyBudgetBillions) / monthlyPayPerRecruit) : 0;
   const recruited = Math.max(0, Math.min(applicants, gap, affordable, 4500));
   m.contracts.monthlyApplicants = applicants;
   m.contracts.recruitedThisMonth = recruited;
@@ -120,72 +114,139 @@ function technologyProgress(tech, monthlyResearchPoints) {
   const level = clamp(tech?.level || 0, 0, 5);
   const points = Math.max(0, Number(tech?.research_points || 0)) + Math.max(0, Number(monthlyResearchPoints || 0));
   const target = (level + 1) * 100;
-  if (level >= 5 || points < target) {
-    return { level, researchPoints: Math.floor(points), completed: false, pointsToNext: Math.max(0, target - points) };
-  }
+  if (level >= 5 || points < target) return { level, researchPoints: Math.floor(points), completed: false, pointsToNext: Math.max(0, target - points) };
   return { level: level + 1, researchPoints: Math.floor(points - target), completed: true, pointsToNext: (level + 2) * 100 - Math.floor(points - target) };
 }
 
-function calculateCombatPower(units, technologies = []) {
-  const techLevels = Object.fromEntries((technologies || []).map(row => [row.tech_id, Number(row.level || 0)]));
-  const techFactor = 1 + Object.values(techLevels).reduce((sum, level) => sum + clamp(level, 0, 5), 0) * 0.012;
-  return (units || []).reduce((total, unit) => {
-    const personnel = Math.max(0, Number(unit.active_personnel || 0));
-    const quality = 0.55 + clamp(unit.equipment_level || 35, 0, 100) / 220 +
-      clamp(unit.experience || 35, 0, 100) / 260 +
-      clamp(unit.morale || 60, 0, 100) / 400 +
-      clamp(unit.readiness || 50, 0, 100) / 400;
-    const supply = 0.45 + clamp(unit.supply || 50, 0, 100) / 180;
-    return total + personnel * quality * supply * techFactor;
-  }, 0);
+function unitQuality(unit) {
+  return 0.55 + clamp(unit.equipment_level ?? 35, 0, 100) / 220 +
+    clamp(unit.experience ?? 35, 0, 100) / 260 +
+    clamp(unit.morale ?? 60, 0, 100) / 400 +
+    clamp(unit.readiness ?? 50, 0, 100) / 400;
 }
 
-function resolveOperationalTurn({ war, friendlyPower, enemyPower, posture = "balanced", orders = [], directive = "", random = Math.random }) {
+function calculateDomainPower(units, technologies = []) {
+  const tech = Object.fromEntries((technologies || []).map(row => [row.tech_id, Number(row.level || 0)]));
+  const levels = key => clamp(tech[key] || 0, 0, 5);
+  const result = { ground: 0, air: 0, naval: 0, guard: 0, totalPersonnel: 0, airframes: 0, vessels: 0 };
+  for (const unit of units || []) {
+    const branch = String(unit.unit_branch || "land").toLowerCase();
+    const quality = unitQuality(unit);
+    const supply = 0.45 + clamp(unit.supply ?? 50, 0, 100) / 180;
+    const readiness = 0.55 + clamp(unit.readiness ?? 50, 0, 100) / 220;
+    const personnel = Math.max(0, Number(unit.active_personnel || 0));
+    const quantity = Math.max(0, Number(unit.quantity || 0));
+    result.totalPersonnel += personnel;
+    if (branch === "land") {
+      result.ground += personnel * quality * supply * (1 + levels("armor") * 0.035);
+    } else if (branch === "guard") {
+      result.guard += personnel * quality * supply * 0.28;
+    } else if (branch === "air") {
+      result.airframes += quantity;
+      result.air += quantity * 72 * quality * readiness * supply * (1 + levels("precision") * 0.025);
+    } else if (branch === "naval") {
+      result.vessels += quantity;
+      result.naval += quantity * 245 * quality * readiness * supply * (1 + levels("naval") * 0.04);
+    }
+  }
+  const comms = 1 + levels("communications") * 0.012;
+  result.ground *= comms;
+  result.air *= comms;
+  result.naval *= comms;
+  result.total = result.ground + result.guard + result.air * 0.42 + result.naval * 0.12;
+  for (const key of ["ground", "guard", "air", "naval", "total"]) result[key] = Math.round(result[key]);
+  result.totalPersonnel = Math.round(result.totalPersonnel);
+  result.airframes = Math.round(result.airframes);
+  result.vessels = Math.round(result.vessels);
+  return result;
+}
+
+function estimateEnemyDomainPower(enemyPersonnel, militaryPower = 45) {
+  const personnel = Math.max(0, Number(enemyPersonnel || 0));
+  const quality = clamp(Number(militaryPower || 45), 5, 100);
+  const factor = 0.62 + quality / 210;
+  const ground = personnel * 0.76 * factor;
+  const air = personnel * 0.00019 * (0.65 + quality / 100) * 72;
+  const naval = personnel * 0.000028 * (0.65 + quality / 100) * 245;
+  return {
+    ground: Math.round(ground), guard: Math.round(personnel * 0.08 * factor),
+    air: Math.round(air), naval: Math.round(naval),
+    total: Math.round(ground + personnel * 0.08 * factor + air * 0.42 + naval * 0.12),
+    totalPersonnel: Math.round(personnel), estimated: true
+  };
+}
+
+function chooseAiPosture({ friendlyDomains, enemyDomains, averageSupply = 70, currentPosture = "balanced", directive = "" }) {
+  const text = String(directive || "").toLocaleLowerCase("ru-RU");
+  if (/(удерж|оборону|оборонять|не наступ|сохранить рубеж|минимизировать потери)/.test(text)) return { posture: "defensive", reason: "Исполнение президентской директивы: удержание позиций" };
+  if (/(наступ|атак|продвинуться|занять район|захватить позици)/.test(text)) return { posture: "offensive", reason: "Исполнение президентской директивы: наступательные действия" };
+  if (currentPosture !== "balanced") return { posture: currentPosture, reason: currentPosture === "defensive" ? "Установлена президентом оборонительная стратегия" : "Установлена президентом наступательная стратегия" };
+  const own = Number(friendlyDomains?.total || 0);
+  const rival = Math.max(1, Number(enemyDomains?.total || 1));
+  const ratio = own / rival;
+  if (averageSupply < 43) return { posture: "defensive", reason: "Недостаточный уровень снабжения: штаб сохраняет силы" };
+  if (ratio < 0.84) return { posture: "defensive", reason: "Соотношение сил не позволяет безопасно наступать" };
+  if (ratio > 1.18 && Number(friendlyDomains?.air || 0) >= Number(enemyDomains?.air || 0) * 0.82) return { posture: "offensive", reason: "Преимущество в силах и приемлемая воздушная поддержка" };
+  return { posture: "balanced", reason: "Силы сопоставимы: штаб избегает неоправданного риска" };
+}
+
+function calculateCombatPower(units, technologies = []) {
+  return calculateDomainPower(units, technologies).total;
+}
+
+function resolveOperationalTurn({
+  war, friendlyPower, enemyPower, posture = "balanced", orders = [], directive = "",
+  friendlyDomains = null, enemyDomains = null, theatreType = "land", intensity = 1, random = Math.random
+}) {
   const text = String(directive || "").toLocaleLowerCase("ru-RU");
   const asksToDefend = /(удерж|оборону|оборонять|не наступ|сохранить рубеж|минимизировать потери)/.test(text);
   const asksToAdvance = /(наступ|атак|продвинуться|занять район|захватить позици)/.test(text);
   const asksRecon = /(развед|наблюден|разведданн)/.test(text);
   const asksLogistics = /(снабжен|логист|ремонт|перегрупп|резерв)/.test(text);
   const chosenPosture = asksToDefend ? "defensive" : asksToAdvance ? "offensive" : posture;
-  const attackFactor = chosenPosture === "offensive" ? 1.12 : chosenPosture === "defensive" ? 0.94 : 1;
-  // Defensive posture improves friendly force protection and reduces enemy pressure.
-  const defenseFactor = chosenPosture === "defensive" ? 0.88 : chosenPosture === "offensive" ? 1.08 : 1;
+  const airOwn = Number(friendlyDomains?.air || 0);
+  const airEnemy = Number(enemyDomains?.air || 0);
+  const seaOwn = Number(friendlyDomains?.naval || 0);
+  const seaEnemy = Number(enemyDomains?.naval || 0);
+  const airControl = airOwn + airEnemy > 0 ? airOwn / (airOwn + airEnemy) : 0.5;
+  const seaControl = seaOwn + seaEnemy > 0 ? seaOwn / (seaOwn + seaEnemy) : 0.5;
+  const airSupport = 1 + (airControl - 0.5) * 0.28;
+  const theatreSupport = theatreType === "maritime" ? 1 + (seaControl - 0.5) * 0.32 : 1 + (seaControl - 0.5) * 0.04;
+  const attackFactor = chosenPosture === "offensive" ? 1.10 : chosenPosture === "defensive" ? 0.97 : 1;
+  const defenseFactor = chosenPosture === "defensive" ? 0.90 : chosenPosture === "offensive" ? 1.06 : 1;
   const orderFactor = (orders || []).reduce((sum, item) => {
     if (item.status !== "queued") return sum;
-    return sum + (item.order_type === "advance" ? 0.025 : item.order_type === "defend" ? 0.02 : item.order_type === "recon" ? 0.01 : 0);
+    return sum + (item.order_type === "advance" ? 0.02 : item.order_type === "defend" ? 0.018 : item.order_type === "recon" ? 0.009 : 0);
   }, 0);
-  const directiveFactor = (asksRecon ? 0.01 : 0) + (asksLogistics ? 0.015 : 0);
-  const friendly = Math.max(1, Number(friendlyPower || 1) * attackFactor * (1 + Math.min(0.1, orderFactor + directiveFactor)) * (0.94 + random() * 0.12));
-  const enemy = Math.max(1, Number(enemyPower || 1) * defenseFactor * (asksRecon ? 0.985 : 1) * (asksLogistics ? 0.99 : 1) * (0.94 + random() * 0.12));
+  const directiveFactor = (asksRecon ? 0.008 : 0) + (asksLogistics ? 0.012 : 0);
+  const noise = 0.975 + random() * 0.05;
+  const friendly = Math.max(1, Number(friendlyPower || 1) * attackFactor * airSupport * theatreSupport *
+    (1 + Math.min(0.08, orderFactor + directiveFactor)) * noise);
+  const enemy = Math.max(1, Number(enemyPower || 1) * defenseFactor *
+    (1 + (0.5 - airControl) * 0.12) *
+    (theatreType === "maritime" ? 1 + (0.5 - seaControl) * 0.16 : 1) *
+    (asksRecon ? 0.992 : 1) * (asksLogistics ? 0.994 : 1) * (0.975 + random() * 0.05));
   const balance = friendly / (friendly + enemy);
-  const control = clamp(Number(war?.front_state?.territoryControl ?? 50) + (balance - 0.5) * 12, 0, 100);
-  const friendlyLossPosture = chosenPosture === "defensive" ? 0.78 : chosenPosture === "offensive" ? 1.12 : 1;
-  const enemyLossPosture = chosenPosture === "offensive" ? 1.18 : chosenPosture === "defensive" ? 0.88 : 1;
-  const friendlyLosses = Math.max(0, Math.round(Math.min(0.006, (0.0015 + (enemy / friendly) * 0.001) * friendlyLossPosture) * Number(war?.front_state?.friendlyPersonnel || 0)));
-  const enemyLosses = Math.max(0, Math.round(Math.min(0.007, (0.0015 + (friendly / enemy) * 0.0012) * enemyLossPosture) * Number(war?.front_state?.enemyPersonnel || 0)));
+  const controlDelta = (balance - 0.5) * (theatreType === "maritime" ? 5.5 : 7.2);
+  const control = clamp(Number(war?.front_state?.territoryControl ?? 50) + controlDelta, 0, 100);
+  const routineIntensity = clamp(intensity, 0.25, 1.5);
+  const friendlyLossPosture = chosenPosture === "defensive" ? 0.78 : chosenPosture === "offensive" ? 1.13 : 1;
+  const enemyLossPosture = chosenPosture === "offensive" ? 1.16 : chosenPosture === "defensive" ? 0.92 : 1;
+  const friendlyLosses = Math.max(0, Math.round(Math.min(0.00072, (0.00012 + (enemy / friendly) * 0.00013) * routineIntensity * friendlyLossPosture) * Number(war?.front_state?.friendlyPersonnel || 0)));
+  const enemyLosses = Math.max(0, Math.round(Math.min(0.00086, (0.00012 + (friendly / enemy) * 0.00015) * routineIntensity * enemyLossPosture) * Number(war?.front_state?.enemyPersonnel || 0)));
   const result = control >= 95 ? "victory" : control <= 5 ? "defeat" : balance > 0.56 ? "initiative" : balance < 0.44 ? "pressure" : "stalemate";
   return {
-    control: Number(control.toFixed(1)),
-    friendlyLosses,
-    enemyLosses,
-    result,
-    friendlyPower: Math.round(friendly),
-    enemyPower: Math.round(enemy),
-    appliedDirective: text.slice(0,240),
-    appliedPosture: chosenPosture
+    control: Number(control.toFixed(1)), controlDelta: Number(controlDelta.toFixed(2)),
+    friendlyLosses, enemyLosses, result,
+    friendlyPower: Math.round(friendly), enemyPower: Math.round(enemy),
+    domainControl: { air: Number((airControl * 100).toFixed(1)), sea: Number((seaControl * 100).toFixed(1)) },
+    appliedDirective: text.slice(0, 240), appliedPosture: chosenPosture
   };
 }
 
 module.exports = {
-  TECHNOLOGIES,
-  SERVICE_LAWS,
-  initializeMilitaryState,
-  normalizeMilitaryState,
-  contractRecruitmentCapacity,
-  legalMobilizationLimit,
-  recruitByContract,
-  mobilizeReserve,
-  technologyProgress,
-  calculateCombatPower,
-  resolveOperationalTurn
+  TECHNOLOGIES, SERVICE_LAWS, initializeMilitaryState, normalizeMilitaryState,
+  contractRecruitmentCapacity, legalMobilizationLimit, recruitByContract,
+  mobilizeReserve, technologyProgress, calculateCombatPower, calculateDomainPower,
+  estimateEnemyDomainPower, chooseAiPosture, resolveOperationalTurn
 };
