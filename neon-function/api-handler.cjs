@@ -6,9 +6,9 @@ const {
   TECHNOLOGIES, SERVICE_LAWS, initializeMilitaryState, normalizeMilitaryState,
   contractRecruitmentCapacity, legalMobilizationLimit, mobilizeReserve,
   technologyProgress, calculateCombatPower, calculateDomainPower,
-  estimateEnemyDomainPower, chooseAiPosture, resolveOperationalTurn
+  estimateEnemyDomainPower, chooseAiPosture, calculateTheatrePower, resolveOperationalTurn
 } = require("./war-engine.cjs");
-const { COUNTRY_ANCHORS, COUNTRY_ADJACENCY } = require("./country-anchors.cjs");
+const { COUNTRY_ANCHORS, COUNTRY_ADJACENCY, COUNTRY_FRONT_ANCHORS, COUNTRY_COAST_ANCHORS } = require("./country-anchors.cjs");
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL && !/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? { rejectUnauthorized: true } : undefined,
@@ -256,6 +256,9 @@ async function handleMilitaryAction(input, gameUser) {
         theatreType: hasLandBorder ? "land" : "maritime",
         homeAnchor: COUNTRY_ANCHORS[homeIso] || null,
         enemyAnchor: COUNTRY_ANCHORS[enemyIso] || null,
+        homeCoastAnchor: COUNTRY_COAST_ANCHORS[homeIso] || null,
+        enemyCoastAnchor: COUNTRY_COAST_ANCHORS[enemyIso] || null,
+        frontAnchor: hasLandBorder ? (COUNTRY_FRONT_ANCHORS[homeIso]?.[enemyIso] || null) : null,
         enemyMilitaryPower: clampNumber(Number(enemyState.militaryPower || 45), 5, 100),
         domainControl: { air: 50, sea: 50 },
         battleTurn: 0
