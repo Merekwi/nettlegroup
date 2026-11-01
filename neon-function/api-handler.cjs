@@ -1673,7 +1673,6 @@ async function main(req,res,forcedPath) {
         if (!saved.rowCount) { await client.query("ROLLBACK"); return out(res,409,{error:"active_game_not_found"}); }
          const game=saved.rows[0],state={...(game.state||{})};
         if (state.phase && state.phase!=="government") { await client.query("ROLLBACK"); return out(res,409,{error:"election_campaign_in_progress"}); }
-); }
         const projects=Array.isArray(state.projects)?state.projects:[];
         const definition=catalog[projectId];
         if (action==="start") {
