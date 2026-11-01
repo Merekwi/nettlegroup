@@ -132,7 +132,7 @@ function calculateDomainPower(units, technologies = []) {
   for (const unit of units || []) {
     const branch = String(unit.unit_branch || "land").toLowerCase();
     const quality = unitQuality(unit);
-    const supply = 0.45 + clamp(unit.supply ?? 50, 0, 100) / 180;
+    const supply = (0.45 + clamp(unit.supply ?? 50, 0, 100) / 180) * (1 + levels("logistics") * 0.025);
     const readiness = 0.55 + clamp(unit.readiness ?? 50, 0, 100) / 220;
     const personnel = Math.max(0, Number(unit.active_personnel || 0));
     const quantity = Math.max(0, Number(unit.quantity || 0));
