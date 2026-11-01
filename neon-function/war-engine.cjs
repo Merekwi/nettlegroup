@@ -190,6 +190,14 @@ function chooseAiPosture({ friendlyDomains, enemyDomains, averageSupply = 70, cu
   return { posture: "balanced", reason: "Силы сопоставимы: штаб избегает неоправданного риска" };
 }
 
+function calculateTheatrePower(domains, theatreType = "land") {
+  if (!domains) return 0;
+  const value = theatreType === "maritime"
+    ? Number(domains.naval || 0) + Number(domains.air || 0) * 0.68 + Number(domains.ground || 0) * 0.13 + Number(domains.guard || 0) * 0.03
+    : Number(domains.ground || 0) + Number(domains.guard || 0) + Number(domains.air || 0) * 0.46 + Number(domains.naval || 0) * 0.035;
+  return Math.max(0, Math.round(value));
+}
+
 function calculateCombatPower(units, technologies = []) {
   return calculateDomainPower(units, technologies).total;
 }
@@ -248,5 +256,5 @@ module.exports = {
   TECHNOLOGIES, SERVICE_LAWS, initializeMilitaryState, normalizeMilitaryState,
   contractRecruitmentCapacity, legalMobilizationLimit, recruitByContract,
   mobilizeReserve, technologyProgress, calculateCombatPower, calculateDomainPower,
-  estimateEnemyDomainPower, chooseAiPosture, resolveOperationalTurn
+  estimateEnemyDomainPower, chooseAiPosture, calculateTheatrePower, resolveOperationalTurn
 };
