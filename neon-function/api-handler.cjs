@@ -1376,7 +1376,7 @@ async function main(req,res,forcedPath) {
         if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
         const game=saved.rows[0],state=ensureInstitutionalState({...game.state});
         if(state.phase&&state.phase!=="government"){await client.query("ROLLBACK");return out(res,409,{error:"government_phase_required"});}
-);}
+
         if(state.constitution.proposals.some(item=>["public_consultation","referendum_scheduled"].includes(item.status))){await client.query("ROLLBACK");return out(res,409,{error:"another_amendment_in_progress"});}
         const cost=Number((Math.max(1,Number(state.gdp||350))*0.00008).toFixed(3));
         if(Number(state.treasury||0)<cost){await client.query("ROLLBACK");return out(res,409,{error:"insufficient_treasury",required:cost,available:state.treasury});}
@@ -1410,7 +1410,7 @@ async function main(req,res,forcedPath) {
         if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
         const game=saved.rows[0],state=ensureInstitutionalState({...game.state});
         if(state.phase&&state.phase!=="government"){await client.query("ROLLBACK");return out(res,409,{error:"government_phase_required"});}
-);}
+
         const proposal=[...state.constitution.proposals].reverse().find(item=>item.status==="public_consultation");
         if(!proposal){await client.query("ROLLBACK");return out(res,409,{error:"no_amendment_awaiting_parliament"});}
         if(proposal.consultationEndsDate?isoDate(game.game_date)<isoDate(proposal.consultationEndsDate):Number(game.turn_number||0)<Number(proposal.consultationEndsTurn||999999)){await client.query("ROLLBACK");return out(res,409,{error:"public_consultation_not_finished",availableAt:proposal.consultationEndsDate||proposal.consultationEndsTurn});}
@@ -1441,7 +1441,7 @@ async function main(req,res,forcedPath) {
         if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
         const game=saved.rows[0],state=ensureInstitutionalState({...game.state});
         if(state.phase&&state.phase!=="government"){await client.query("ROLLBACK");return out(res,409,{error:"government_phase_required"});}
-);}
+
         const proposal=[...state.constitution.proposals].reverse().find(item=>item.status==="referendum_scheduled");
         if(!proposal){await client.query("ROLLBACK");return out(res,409,{error:"no_constitutional_referendum_scheduled"});}
         if(proposal.referendumDate?isoDate(game.game_date)<isoDate(proposal.referendumDate):Number(game.turn_number||0)<Number(proposal.referendumTurn||999999)){await client.query("ROLLBACK");return out(res,409,{error:"referendum_not_scheduled_yet",availableAt:proposal.referendumDate||proposal.referendumTurn});}
@@ -1483,7 +1483,7 @@ async function main(req,res,forcedPath) {
         if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
         const game=saved.rows[0],state=ensureInstitutionalState({...game.state});
         if(state.phase&&state.phase!=="government"){await client.query("ROLLBACK");return out(res,409,{error:"government_phase_required"});}
-);}
+
         if(state.referendums.some(item=>item.status==="campaign")){await client.query("ROLLBACK");return out(res,409,{error:"referendum_already_in_campaign"});}
         const cost=Number((Math.max(1,Number(state.gdp||350))*0.00005).toFixed(3));
         if(Number(state.treasury||0)<cost){await client.query("ROLLBACK");return out(res,409,{error:"insufficient_treasury",required:cost,available:state.treasury});}
@@ -1511,7 +1511,7 @@ async function main(req,res,forcedPath) {
         if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
         const game=saved.rows[0],state=ensureInstitutionalState({...game.state});
         if(state.phase&&state.phase!=="government"){await client.query("ROLLBACK");return out(res,409,{error:"government_phase_required"});}
-);}
+
         const referendum=[...state.referendums].reverse().find(item=>item.status==="campaign");
         if(!referendum){await client.query("ROLLBACK");return out(res,409,{error:"no_referendum_awaiting_vote"});}
         if(referendum.voteDate?isoDate(game.game_date)<isoDate(referendum.voteDate):Number(game.turn_number||0)<Number(referendum.voteTurn||999999)){await client.query("ROLLBACK");return out(res,409,{error:"referendum_campaign_not_finished",availableAt:referendum.voteDate||referendum.voteTurn});}
@@ -1804,7 +1804,7 @@ async function main(req,res,forcedPath) {
         if(!saved.rowCount){await client.query("ROLLBACK");return out(res,409,{error:"active_game_not_found"});}
          const game=saved.rows[0],state={...(game.state||{})};
         if(state.phase&&state.phase!=="government"){await client.query("ROLLBACK");return out(res,409,{error:"election_campaign_in_progress"});}
-);}
+
         const found=await client.query("SELECT * FROM diplomatic_relations WHERE id=$1 AND save_id=$2 FOR UPDATE",[relationId,game.id]);
         if(!found.rowCount){await client.query("ROLLBACK");return out(res,404,{error:"diplomatic_relation_not_found"});}
         const relation=found.rows[0],raw=relation.treaties&&typeof relation.treaties==="object"?relation.treaties:[];
@@ -1917,7 +1917,7 @@ async function main(req,res,forcedPath) {
         const d=await client.query("SELECT * FROM decrees WHERE id=$1 AND save_id=$2 FOR UPDATE",[decreeId,game.id]);
         if(!d.rowCount){await client.query("ROLLBACK");return out(res,404,{error:"decree_not_found"});}
         if(d.rows[0].status!=="draft"){await client.query("ROLLBACK");return out(res,409,{error:"decree_not_draft"});}
-);}
+
         const projects=Array.isArray(state.projects)?state.projects:[];
         if(projects.filter(project=>project.status==="active").length>=3){await client.query("ROLLBACK");return out(res,409,{error:"too_many_active_programs"});}
         const effects=assessPolicy(d.rows[0].original_order,state);
