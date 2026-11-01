@@ -625,15 +625,16 @@ async function runAutonomousWarTick(delivery) {
       return { ok: true, skipped: true, reason: "another_tick_is_running", processed: 0 };
     }
     const due = await client.query(
-      `SELECT w.*,g.id AS game_id,g.game_date,g.state AS game_state,g.country_id,
+      `SELECT w.*,g.id AS game_id,g.game_date,g.game_datetime,g.state AS game_state,g.country_id,
               home.iso2 AS home_iso2,enemy.baseline_state AS enemy_baseline_state
          FROM military_wars w
          JOIN game_saves g ON g.id=w.save_id AND g.status='active'
          LEFT JOIN countries home ON home.id=g.country_id
          LEFT JOIN countries enemy ON enemy.id=w.opponent_country_id
         WHERE w.status='active' AND w.command_mode='ai'
-          AND COALESCE(NULLIF(w.last_report->>'autoTickAt','')::timestamptz,'epoch'::timestamptz)
-              <= now()-interval '15 minutes'
+          AND COALESCE(NULLIF(w.last_report->>'autoTickGameTime','')::timestamp,
+                       g.game_datetime-interval '12 hours')
+              <= g.game_datetime-interval '12 hours'
         ORDER BY w.updated_at
         LIMIT 80
         FOR UPDATE OF w SKIP LOCKED`
@@ -730,7 +731,8 @@ async function runAutonomousWarTick(delivery) {
         friendlyPower:resolution.friendlyPower,enemyPower:resolution.enemyPower,
         friendlyDomains,enemyDomains,domainControl:resolution.domainControl,
         appliedPosture:decision.posture,aiReason:decision.reason,
-        appliedDirective:war.commander_directive||"",autoTickAt:at
+        appliedDirective:war.commander_directive||"",autoTickAt:at,
+        autoTickGameTime:war.game_datetime
       };
       await client.query(
         "UPDATE military_wars SET status=$1,strategic_posture=$2,turn_number=turn_number+1,front_state=$3::jsonb,last_report=$4::jsonb,ended_on=CASE WHEN $1 IN ('won','lost') THEN $5::date ELSE ended_on END,updated_at=now() WHERE id=$6",
