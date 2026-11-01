@@ -981,8 +981,7 @@ async function processCalendarMonth(client, game, gameUser, boundaryDate) {
         const eventHeadline=electionStarted?"До национальных выборов осталось три месяца":event.headline;
         const eventArticle=electionStarted?"Началась предвыборная кампания. Правительству предстоит вновь получить мандат избирателей.":event.article;
         await client.query("INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)",[game.id,newDate,electionStarted?"election_notice":event.type,eventHeadline,eventArticle,electionStarted?2:(event.type==="crisis"?3:2),JSON.stringify({approval:event.approval,stability:event.stability,gdpGrowth:event.growth,treasury:event.treasury,monthlyBudget:monthlyBalance,ministerEffects,electionStarted})]);
-        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'month_advanced',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({turn:updated.rows[0].turn_number,event:event.type,monthlyBudget:monthlyBalance,electionStarted,ministerEffects})]);
-        await client.query("COMMIT");
+        await client.query("INSERT INTO audit_log(user_id,save_id,action,details) VALUES($1,$2,'calendar_month_processed',$3::jsonb)",[gameUser.id,game.id,JSON.stringify({month:newDate,event:event.type,monthlyBudget:monthlyBalance,electionStarted,ministerEffects})]);
 
   return {ok:true,game:{...updated.rows[0],state},event:{type:electionStarted?"election_notice":event.type,headline:eventHeadline,article:eventArticle},monthlyBudget:monthlyBalance,electionStarted,ministerEffects,lastMonthChanges:state.lastMonthChanges};
 }
