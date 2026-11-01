@@ -313,16 +313,18 @@ async function handleMilitaryAction(input, gameUser) {
       const friendlyDomains = calculateDomainPower(units, technologies.rows);
       const baseline = war.baseline_state && typeof war.baseline_state === "object" ? war.baseline_state : {};
       const enemyDomains = estimateEnemyDomainPower(Number(war.front_state?.enemyPersonnel || 0), Number(baseline.militaryPower || war.front_state?.enemyMilitaryPower || 45));
-      const enemyPower = Math.max(1000, enemyDomains.total);
+      const theatreType=war.front_state?.theatreType||"land";
+      const friendlyPower=calculateTheatrePower(friendlyDomains,theatreType);
+      const enemyPower=Math.max(1000,calculateTheatrePower(enemyDomains,theatreType));
       const pendingOrders = await client.query("SELECT * FROM military_orders WHERE war_id=$1 AND status='queued' ORDER BY created_at", [warId]);
       const averageSupply = units.length ? units.reduce((sum, unit) => sum + Number(unit.supply || 0), 0) / units.length : 0;
       const decision = war.command_mode === "ai"
         ? chooseAiPosture({ friendlyDomains, enemyDomains, averageSupply, currentPosture: war.strategic_posture, directive: war.commander_directive })
         : { posture: war.strategic_posture, reason: "Прямое командование президента" };
       const resolution = resolveOperationalTurn({
-        war, friendlyPower: friendlyDomains.total, enemyPower, posture: decision.posture,
+        war, friendlyPower, enemyPower, posture: decision.posture,
         directive: war.commander_directive || "", orders: pendingOrders.rows,
-        friendlyDomains, enemyDomains, theatreType: war.front_state?.theatreType || "land",
+        friendlyDomains, enemyDomains, theatreType,
         random: () => crypto.randomInt(0, 10001) / 10000
       });
       const nextFront = {
@@ -636,8 +638,10 @@ async function runAutonomousWarTick(delivery) {
       });
       const theatreType = war.front_state?.theatreType ||
         ((COUNTRY_ADJACENCY[String(war.home_iso2||"").toUpperCase()]||[]).includes(String(war.front_state?.enemyCountryIso2||"").toUpperCase())?"land":"maritime");
+      const friendlyPower=calculateTheatrePower(friendlyDomains,theatreType);
+      const enemyTheatrePower=Math.max(1000,calculateTheatrePower(enemyDomains,theatreType));
       const resolution = resolveOperationalTurn({
-        war,friendlyPower:friendlyDomains.total,enemyPower:enemyDomains.total,
+        war,friendlyPower,enemyPower:enemyTheatrePower,
         posture:decision.posture,directive:war.commander_directive||"",
         friendlyDomains,enemyDomains,theatreType,intensity:1,
         random:()=>crypto.randomInt(0,10001)/10000
