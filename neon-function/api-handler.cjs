@@ -5,8 +5,10 @@ const { createMinisterProfile, calculateMonthlyTreasury } = require("./minister-
 const {
   TECHNOLOGIES, SERVICE_LAWS, initializeMilitaryState, normalizeMilitaryState,
   contractRecruitmentCapacity, legalMobilizationLimit, mobilizeReserve,
-  technologyProgress, calculateCombatPower, resolveOperationalTurn
+  technologyProgress, calculateCombatPower, calculateDomainPower,
+  estimateEnemyDomainPower, chooseAiPosture, resolveOperationalTurn
 } = require("./war-engine.cjs");
+const { COUNTRY_ANCHORS, COUNTRY_ADJACENCY } = require("./country-anchors.cjs");
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL && !/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? { rejectUnauthorized: true } : undefined,
@@ -240,19 +242,26 @@ async function handleMilitaryAction(input, gameUser) {
       const enemyState = enemy.baseline_state && typeof enemy.baseline_state === "object" ? enemy.baseline_state : {};
       const enemyPopulation = Math.max(1, Number(enemyState.population || state.population || 20));
       const enemyPersonnel = Math.floor(enemyPopulation * 1_000_000 * 0.003);
+      const homeIso = String(game.iso2 || "").toUpperCase();
+      const enemyIso = String(enemy.iso2 || "").toUpperCase();
+      const hasLandBorder = (COUNTRY_ADJACENCY[homeIso] || []).includes(enemyIso);
       const frontState = {
         territoryControl: 50,
         friendlyPersonnel: activePersonnel,
         enemyPersonnel,
         friendlyLosses: 0,
         enemyLosses: 0,
-        playerCountryIso2: game.iso2 || null,
-        enemyCountryIso2: enemy.iso2 || null,
+        playerCountryIso2: homeIso || null,
+        enemyCountryIso2: enemyIso || null,
+        theatreType: hasLandBorder ? "land" : "maritime",
+        homeAnchor: COUNTRY_ANCHORS[homeIso] || null,
+        enemyAnchor: COUNTRY_ANCHORS[enemyIso] || null,
         enemyMilitaryPower: clampNumber(Number(enemyState.militaryPower || 45), 5, 100),
+        domainControl: { air: 50, sea: 50 },
         battleTurn: 0
       };
       const inserted = await client.query(
-        "INSERT INTO military_wars(save_id,opponent_country_id,opponent_country_name,war_goal,front_state,started_on) VALUES($1,$2,$3,$4,$5::jsonb,$6::date) RETURNING *",
+        "INSERT INTO military_wars(save_id,opponent_country_id,opponent_country_name,war_goal,front_state,started_on,command_mode,strategic_posture) VALUES($1,$2,$3,$4,$5::jsonb,$6::date,'ai','balanced') RETURNING *",
         [game.id, opponentId, enemy.name_local || enemy.name_en || "Иностранное государство", txt(input.warGoal, 160) || "Ограниченные военные цели", JSON.stringify(frontState), isoDate(game.game_date)]
       );
       result.war = inserted.rows[0];
@@ -298,14 +307,19 @@ async function handleMilitaryAction(input, gameUser) {
       if (!found.rowCount) throw Object.assign(new Error("Активная война не найдена"), { status: 404 });
       const war = found.rows[0];
       const technologies = await client.query("SELECT tech_id,level FROM military_technologies WHERE save_id=$1", [game.id]);
-      const friendlyPower = calculateCombatPower(units, technologies.rows);
+      const friendlyDomains = calculateDomainPower(units, technologies.rows);
       const baseline = war.baseline_state && typeof war.baseline_state === "object" ? war.baseline_state : {};
-      const enemyPower = Math.max(1000, Number(war.front_state?.enemyPersonnel || 1) *
-        (0.78 + clampNumber(Number(baseline.militaryPower || war.front_state?.enemyMilitaryPower || 45), 5, 100) / 220));
+      const enemyDomains = estimateEnemyDomainPower(Number(war.front_state?.enemyPersonnel || 0), Number(baseline.militaryPower || war.front_state?.enemyMilitaryPower || 45));
+      const enemyPower = Math.max(1000, enemyDomains.total);
       const pendingOrders = await client.query("SELECT * FROM military_orders WHERE war_id=$1 AND status='queued' ORDER BY created_at", [warId]);
+      const averageSupply = units.length ? units.reduce((sum, unit) => sum + Number(unit.supply || 0), 0) / units.length : 0;
+      const decision = war.command_mode === "ai"
+        ? chooseAiPosture({ friendlyDomains, enemyDomains, averageSupply, currentPosture: war.strategic_posture, directive: war.commander_directive })
+        : { posture: war.strategic_posture, reason: "Прямое командование президента" };
       const resolution = resolveOperationalTurn({
-        war, friendlyPower, enemyPower, posture: war.strategic_posture,
+        war, friendlyPower: friendlyDomains.total, enemyPower, posture: decision.posture,
         directive: war.commander_directive || "", orders: pendingOrders.rows,
+        friendlyDomains, enemyDomains, theatreType: war.front_state?.theatreType || "land",
         random: () => crypto.randomInt(0, 10001) / 10000
       });
       const nextFront = {
@@ -316,13 +330,21 @@ async function handleMilitaryAction(input, gameUser) {
         friendlyLosses: Number(war.front_state?.friendlyLosses || 0) + resolution.friendlyLosses,
         enemyLosses: Number(war.front_state?.enemyLosses || 0) + resolution.enemyLosses,
         battleTurn: Number(war.front_state?.battleTurn || 0) + 1,
-        lastResult: resolution.result
+        lastResult: resolution.result,
+        domainControl: resolution.domainControl,
+        aiPosture: decision.posture,
+        aiReason: decision.reason
       };
       if (resolution.friendlyLosses > 0) {
         let remaining = resolution.friendlyLosses;
-        for (const unit of units.filter(item => item.active_personnel > 0).sort((a,b) => Number(b.active_personnel)-Number(a.active_personnel))) {
+        const frontlineUnits = units.filter(item => ["land", "guard"].includes(item.unit_branch) && Number(item.active_personnel || 0) > 0)
+          .sort((a,b) => Number(b.active_personnel)-Number(a.active_personnel));
+        for (const unit of frontlineUnits) {
           const loss = Math.min(remaining, Number(unit.active_personnel || 0));
-          if (loss > 0) await client.query("UPDATE military_units SET active_personnel=GREATEST(0,active_personnel-$1),updated_at=now() WHERE id=$2", [loss, unit.id]);
+          if (loss > 0) {
+            await client.query("UPDATE military_units SET active_personnel=GREATEST(0,active_personnel-$1),updated_at=now() WHERE id=$2", [loss, unit.id]);
+            unit.active_personnel = Number(unit.active_personnel || 0) - loss;
+          }
           remaining -= loss;
           if (remaining <= 0) break;
         }
@@ -335,7 +357,12 @@ async function handleMilitaryAction(input, gameUser) {
         friendlyLosses: resolution.friendlyLosses,
         enemyLosses: resolution.enemyLosses,
         friendlyPower: resolution.friendlyPower,
-        enemyPower: resolution.enemyPower
+        enemyPower: resolution.enemyPower,
+        friendlyDomains,
+        enemyDomains,
+        domainControl: resolution.domainControl,
+        appliedPosture: decision.posture,
+        aiReason: decision.reason
       };
       const updated = await client.query(
         "UPDATE military_wars SET status=$1,turn_number=turn_number+1,front_state=$2::jsonb,last_report=$3::jsonb,ended_on=CASE WHEN $1 IN ('won','lost') THEN $4::date ELSE ended_on END,updated_at=now() WHERE id=$5 RETURNING *",
@@ -566,6 +593,116 @@ async function draftOfficialDocument(order, game, effects) {
   }catch(error){console.error("OpenRouter decree draft failed:",error.message);return fallback;}
 }
 
+async function runAutonomousWarTick(delivery) {
+  const client = await presidentialPool.connect();
+  try {
+    await client.query("BEGIN");
+    const lock = await client.query("SELECT pg_try_advisory_xact_lock(hashtext('presidential-autonomous-war-ai')) AS acquired");
+    if (!lock.rows[0]?.acquired) {
+      await client.query("COMMIT");
+      return { ok: true, skipped: true, reason: "another_tick_is_running", processed: 0 };
+    }
+    const due = await client.query(
+      `SELECT w.*,g.id AS game_id,g.game_date,g.state AS game_state,g.country_id,
+              home.iso2 AS home_iso2,enemy.baseline_state AS enemy_baseline_state
+         FROM military_wars w
+         JOIN game_saves g ON g.id=w.save_id AND g.status='active'
+         LEFT JOIN countries home ON home.id=g.country_id
+         LEFT JOIN countries enemy ON enemy.id=w.opponent_country_id
+        WHERE w.status='active' AND w.command_mode='ai'
+          AND COALESCE(NULLIF(w.last_report->>'autoTickAt','')::timestamptz,'epoch'::timestamptz)
+              <= now()-interval '15 minutes'
+        ORDER BY w.updated_at
+        LIMIT 80
+        FOR UPDATE OF w SKIP LOCKED`
+    );
+    let processed = 0;
+    const reports = [];
+    for (const war of due.rows) {
+      const unitsResult = await client.query("SELECT * FROM military_units WHERE save_id=$1 ORDER BY unit_branch,unit_type FOR UPDATE",[war.game_id]);
+      const units = unitsResult.rows;
+      const techResult = await client.query("SELECT tech_id,level FROM military_technologies WHERE save_id=$1",[war.game_id]);
+      const friendlyDomains = calculateDomainPower(units,techResult.rows);
+      const baseline = war.enemy_baseline_state && typeof war.enemy_baseline_state === "object" ? war.enemy_baseline_state : {};
+      const enemyDomains = estimateEnemyDomainPower(Number(war.front_state?.enemyPersonnel || 0),Number(baseline.militaryPower || war.front_state?.enemyMilitaryPower || 45));
+      const averageSupply = units.length ? units.reduce((sum,unit)=>sum+Number(unit.supply||0),0)/units.length : 0;
+      const decision = chooseAiPosture({
+        friendlyDomains,enemyDomains,averageSupply,
+        currentPosture:war.strategic_posture,
+        directive:war.commander_directive||""
+      });
+      const theatreType = war.front_state?.theatreType ||
+        ((COUNTRY_ADJACENCY[String(war.home_iso2||"").toUpperCase()]||[]).includes(String(war.front_state?.enemyCountryIso2||"").toUpperCase())?"land":"maritime");
+      const resolution = resolveOperationalTurn({
+        war,friendlyPower:friendlyDomains.total,enemyPower:enemyDomains.total,
+        posture:decision.posture,directive:war.commander_directive||"",
+        friendlyDomains,enemyDomains,theatreType,intensity:1,
+        random:()=>crypto.randomInt(0,10001)/10000
+      });
+      let remainingLosses=resolution.friendlyLosses;
+      const frontlineUnits=units.filter(unit=>["land","guard"].includes(unit.unit_branch)&&Number(unit.active_personnel||0)>0)
+        .sort((a,b)=>Number(b.active_personnel||0)-Number(a.active_personnel||0));
+      for(const unit of frontlineUnits){
+        const loss=Math.min(remainingLosses,Number(unit.active_personnel||0));
+        if(loss>0){
+          await client.query("UPDATE military_units SET active_personnel=GREATEST(0,active_personnel-$1),updated_at=now() WHERE id=$2",[loss,unit.id]);
+          unit.active_personnel=Number(unit.active_personnel||0)-loss;
+        }
+        remainingLosses-=loss;
+        if(remainingLosses<=0)break;
+      }
+      const front={
+        ...(war.front_state||{}),
+        theatreType,
+        territoryControl:resolution.control,
+        friendlyPersonnel:Math.max(0,Number(war.front_state?.friendlyPersonnel||friendlyDomains.totalPersonnel)-resolution.friendlyLosses),
+        enemyPersonnel:Math.max(0,Number(war.front_state?.enemyPersonnel||0)-resolution.enemyLosses),
+        friendlyLosses:Number(war.front_state?.friendlyLosses||0)+resolution.friendlyLosses,
+        enemyLosses:Number(war.front_state?.enemyLosses||0)+resolution.enemyLosses,
+        battleTurn:Number(war.front_state?.battleTurn||0)+1,
+        domainControl:resolution.domainControl,
+        lastResult:resolution.result,
+        lastAiPosture:decision.posture,
+        lastAiReason:decision.reason,
+        friendlyDomains,
+        estimatedEnemyDomains:enemyDomains
+      };
+      const at = new Date().toISOString();
+      const terminal=resolution.control>=95?"won":resolution.control<=5?"lost":"active";
+      const previousResult=war.last_report?.result||"";
+      const report={
+        result:resolution.result,battleTurn:front.battleTurn,territoryControl:resolution.control,
+        friendlyLosses:resolution.friendlyLosses,enemyLosses:resolution.enemyLosses,
+        friendlyPower:resolution.friendlyPower,enemyPower:resolution.enemyPower,
+        friendlyDomains,enemyDomains,domainControl:resolution.domainControl,
+        appliedPosture:decision.posture,aiReason:decision.reason,
+        appliedDirective:war.commander_directive||"",autoTickAt:at
+      };
+      await client.query(
+        "UPDATE military_wars SET status=$1,strategic_posture=$2,turn_number=turn_number+1,front_state=$3::jsonb,last_report=$4::jsonb,ended_on=CASE WHEN $1 IN ('won','lost') THEN $5::date ELSE ended_on END,updated_at=now() WHERE id=$6",
+        [terminal,decision.posture,JSON.stringify(front),JSON.stringify(report),isoDate(war.game_date),war.id]
+      );
+      processed++;
+      reports.push({warId:war.id,saveId:war.game_id,result:resolution.result,posture:decision.posture,battleTurn:front.battleTurn});
+      if(front.battleTurn%4===0||previousResult!==resolution.result||terminal!=="active"){
+        const headline=terminal==="won"?"Штаб сообщил о победе":terminal==="lost"?"Военная операция завершилась поражением":"Автономная операция генерального штаба";
+        const article="Штаб ИИ самостоятельно провёл оперативный цикл. Решение: "+decision.reason+". Стратегия: "+decision.posture+". Театр: "+(theatreType==="land"?"сухопутный":"морской/экспедиционный")+". Потери: свои "+resolution.friendlyLosses+", противника "+resolution.enemyLosses+". Воздушный контроль: "+resolution.domainControl.air+"%; морской контроль: "+resolution.domainControl.sea+"%.";
+        await client.query(
+          "INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'military_operation',$3,$4,3,$5::jsonb)",
+          [war.game_id,war.game_date,headline,article,JSON.stringify(report)]
+        );
+      }
+    }
+    await client.query("COMMIT");
+    return { ok:true, processed, reports };
+  } catch(error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function main(req,res,forcedPath) {
   const path = forcedPath || (new URL(req.url,"https://localhost").pathname.replace(/\/+$/,"") || "/");
   setCors(req,res);
@@ -573,6 +710,19 @@ async function main(req,res,forcedPath) {
     const origins = path.startsWith("/api/presidential/") ? [process.env.SITE_ORIGIN, GAME_ORIGIN] : [process.env.SITE_ORIGIN];
     if (!req.headers.origin || !origins.includes(req.headers.origin)) return out(res,403,{error:"origin_check_failed"});
     res.statusCode=204; res.setHeader("Allow","GET, POST, PATCH, OPTIONS"); return res.end();
+  }
+
+  if (path === "/internal/war-ai-tick" && req.method === "POST") {
+    const delivery = await readBody(req);
+    const invocationId = String(req.headers["x-neon-trigger-invocation-id"] || "");
+    if (!invocationId || invocationId !== String(delivery?.invocation_id || "") ||
+        delivery?.version !== 1 || delivery?.trigger?.type !== "schedule" ||
+        delivery?.trigger?.name !== "presidential-war-ai-every-five-minutes") {
+      return out(res, 401, { error: "invalid_neon_trigger" });
+    }
+    if (!presidentialPool) return out(res, 503, { error: "presidential_database_not_configured" });
+    const result = await runAutonomousWarTick(delivery);
+    return out(res, 200, result);
   }
 
   // Presidential Simulator endpoints reuse the Telegram bot already connected to Nettle Group.
@@ -1086,6 +1236,16 @@ async function main(req,res,forcedPath) {
       const technologyRows=technologies.rowCount?technologies.rows:(await presidentialPool.query(
         "SELECT save_id,tech_id,level,research_points,is_researching,updated_at FROM military_technologies WHERE save_id=$1 ORDER BY tech_id",[game.id]
       )).rows;
+      const anchor=COUNTRY_ANCHORS[String(game.iso2||"").toUpperCase()]||null;
+      if(anchor){
+        for(const unit of units.rows){
+          if(unit.location_lat==null||unit.location_lon==null){
+            await presidentialPool.query("UPDATE military_units SET location_lat=COALESCE(location_lat,$1),location_lon=COALESCE(location_lon,$2),updated_at=now() WHERE id=$3",[anchor.lat,anchor.lon,unit.id]);
+            unit.location_lat=unit.location_lat==null?anchor.lat:unit.location_lat;
+            unit.location_lon=unit.location_lon==null?anchor.lon:unit.location_lon;
+          }
+        }
+      }
       const activePersonnel=units.rows.reduce((sum,unit)=>sum+Number(unit.active_personnel||0),0);
       const military=normalizeMilitaryState(liveState.military,liveState.population||1,activePersonnel);
       military.manpower.activePersonnel=activePersonnel;
@@ -1327,53 +1487,7 @@ async function main(req,res,forcedPath) {
           patrols:Number(activePatrols.rows[0]?.count||0)
         };
 
-        // The headquarters AI resolves an operational turn each month unless the president takes direct command.
-        const technologyRows=await client.query("SELECT tech_id,level FROM military_technologies WHERE save_id=$1",[game.id]);
-        const activeWars=await client.query(
-          "SELECT w.*,c.baseline_state FROM military_wars w LEFT JOIN countries c ON c.id=w.opponent_country_id WHERE w.save_id=$1 AND w.status='active' AND w.command_mode='ai' FOR UPDATE OF w",
-          [game.id]
-        );
-        for(const war of activeWars.rows){
-          const friendlyPower=calculateCombatPower(militaryUnits,technologyRows.rows);
-          const baseline=war.baseline_state&&typeof war.baseline_state==="object"?war.baseline_state:{};
-          const enemyPower=Math.max(1000,Number(war.front_state?.enemyPersonnel||1)*
-            (0.78+clampNumber(Number(baseline.militaryPower||war.front_state?.enemyMilitaryPower||45),5,100)/220));
-          const resolution=resolveOperationalTurn({
-            war,friendlyPower,enemyPower,posture:war.strategic_posture,
-            directive:war.commander_directive||"",orders:[],
-            random:()=>crypto.randomInt(0,10001)/10000
-          });
-          const front={
-            ...(war.front_state||{}),
-            territoryControl:resolution.control,
-            friendlyPersonnel:Math.max(0,Number(war.front_state?.friendlyPersonnel||activePersonnel)-resolution.friendlyLosses),
-            enemyPersonnel:Math.max(0,Number(war.front_state?.enemyPersonnel||0)-resolution.enemyLosses),
-            friendlyLosses:Number(war.front_state?.friendlyLosses||0)+resolution.friendlyLosses,
-            enemyLosses:Number(war.front_state?.enemyLosses||0)+resolution.enemyLosses,
-            battleTurn:Number(war.front_state?.battleTurn||0)+1,
-            lastResult:resolution.result
-          };
-          let remainingLosses=resolution.friendlyLosses;
-          for(const unit of militaryUnits.filter(item=>Number(item.active_personnel||0)>0).sort((a,b)=>Number(b.active_personnel)-Number(a.active_personnel))){
-            const loss=Math.min(remainingLosses,Number(unit.active_personnel||0));
-            if(loss>0){
-              await client.query("UPDATE military_units SET active_personnel=GREATEST(0,active_personnel-$1),updated_at=now() WHERE id=$2",[loss,unit.id]);
-              unit.active_personnel=Number(unit.active_personnel||0)-loss;
-            }
-            remainingLosses-=loss;
-            if(remainingLosses<=0)break;
-          }
-          const terminal=resolution.control>=95?"won":resolution.control<=5?"lost":"active";
-          const report={result:resolution.result,territoryControl:resolution.control,friendlyLosses:resolution.friendlyLosses,enemyLosses:resolution.enemyLosses,battleTurn:front.battleTurn};
-          await client.query(
-            "UPDATE military_wars SET status=$1,turn_number=turn_number+1,front_state=$2::jsonb,last_report=$3::jsonb,ended_on=CASE WHEN $1 IN ('won','lost') THEN $4::date ELSE ended_on END,updated_at=now() WHERE id=$5",
-            [terminal,JSON.stringify(front),JSON.stringify(report),isoDate(game.game_date),war.id]
-          );
-          await client.query(
-            "INSERT INTO game_events(save_id,game_date,event_type,headline,article,severity,effects) VALUES($1,$2,'military_operation',$3,$4,3,$5::jsonb)",
-            [game.id,game.game_date,"Военный штаб: "+resolution.result,"Штаб ИИ провёл оперативный ход. Потери: свои "+resolution.friendlyLosses+", противника "+resolution.enemyLosses+". Контроль линии фронта: "+resolution.control+"%.",JSON.stringify(report)]
-          );
-        }
+        // Active wars advance on the independent Neon schedule, not when the president advances the calendar.
         military.manpower.activePersonnel=militaryUnits.reduce((sum,unit)=>sum+Number(unit.active_personnel||0),0);
         military.manpower.availablePool=Math.max(0,legalMobilizationLimit(military)-military.manpower.activePersonnel);
         state.military=military;
@@ -1837,10 +1951,11 @@ async function main(req,res,forcedPath) {
           ["Военно-морские силы",Math.max(3,Math.round(population*0.55)),64,69,"naval",Math.max(1200,Math.floor(population*90))],
           ["Национальная гвардия",Math.max(2500,Math.round(population*800)),68,74,"guard",Math.max(2500,Math.floor(population*650))]
         ];
+        const countryAnchor=COUNTRY_ANCHORS[String(country.iso2||"").toUpperCase()]||null;
         for (const unit of militaryUnits) {
           await client.query(
-            "INSERT INTO military_units(save_id,unit_type,quantity,readiness,supply,unit_branch,active_personnel,reserve_personnel,equipment_level,experience,morale) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-            [save.id,unit[0],unit[1],unit[2],unit[3],unit[4],unit[5],unit[4]==="land"?Math.floor(state.military.manpower.trainedReserve*0.65):unit[4]==="guard"?Math.floor(state.military.manpower.trainedReserve*0.35):0,Math.max(25,unit[2]-5),Math.max(25,unit[2]-8),Math.max(35,unit[3])]
+            "INSERT INTO military_units(save_id,unit_type,quantity,readiness,supply,unit_branch,active_personnel,reserve_personnel,equipment_level,experience,morale,location_lat,location_lon) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+            [save.id,unit[0],unit[1],unit[2],unit[3],unit[4],unit[5],unit[4]==="land"?Math.floor(state.military.manpower.trainedReserve*0.65):unit[4]==="guard"?Math.floor(state.military.manpower.trainedReserve*0.35):0,Math.max(25,unit[2]-5),Math.max(25,unit[2]-8),Math.max(35,unit[3]),countryAnchor?.lat??null,countryAnchor?.lon??null]
           );
         }
         await client.query(
