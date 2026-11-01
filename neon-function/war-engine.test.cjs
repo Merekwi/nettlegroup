@@ -4,7 +4,7 @@ const {
   TECHNOLOGIES, SERVICE_LAWS, initializeMilitaryState, normalizeMilitaryState,
   contractRecruitmentCapacity, legalMobilizationLimit, recruitByContract,
   mobilizeReserve, technologyProgress, calculateCombatPower, calculateDomainPower,
-  estimateEnemyDomainPower, chooseAiPosture, resolveOperationalTurn
+  estimateEnemyDomainPower, chooseAiPosture, calculateTheatrePower, resolveOperationalTurn
 } = require("./war-engine.cjs");
 
 test("military manpower starts from population and legal service model", () => {
@@ -133,4 +133,25 @@ test("air and naval superiority are reported separately by the operational model
   assert.ok(result.domainControl.air > 50);
   assert.ok(result.domainControl.sea < 50);
   assert.ok(result.control > 50);
+});
+
+test("naval campaigns weight fleet and aviation higher than land manpower", () => {
+  const seaForce = { ground: 12000, guard: 1000, air: 14000, naval: 65000 };
+  assert.ok(calculateTheatrePower(seaForce, "maritime") > calculateTheatrePower(seaForce, "land"));
+  const landForce = { ground: 65000, guard: 5000, air: 12000, naval: 400 };
+  assert.ok(calculateTheatrePower(landForce, "land") > calculateTheatrePower(landForce, "maritime"));
+});
+
+test("operational cycles can record aircraft and ship attrition", () => {
+  const result = resolveOperationalTurn({
+    war: { front_state: { territoryControl: 50, friendlyPersonnel: 90000, enemyPersonnel: 85000 } },
+    friendlyPower: 100000, enemyPower: 100000,
+    friendlyDomains: { air: 18000, naval: 5000, airframes: 70, vessels: 8 },
+    enemyDomains: { air: 9000, naval: 7000 },
+    theatreType: "maritime", random: () => 0.5
+  });
+  assert.ok(Number.isInteger(result.friendlyAircraftLosses));
+  assert.ok(Number.isInteger(result.friendlyVesselLosses));
+  assert.ok(result.friendlyAircraftLosses <= 70);
+  assert.ok(result.friendlyVesselLosses <= 8);
 });
