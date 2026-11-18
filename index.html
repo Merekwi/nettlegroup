@@ -10,6 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="winter.css">
 </head>
 <body class="home">
 <div class="ambient" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -88,4 +89,5 @@
  if(art&&!window.matchMedia('(prefers-reduced-motion: reduce)').matches){art.addEventListener('pointermove',e=>{const r=art.getBoundingClientRect();const x=(e.clientX-r.left)/r.width-.5;const y=(e.clientY-r.top)/r.height-.5;art.style.setProperty('--mx',x.toFixed(3));art.style.setProperty('--my',y.toFixed(3));});}
 })();
 </script>
+<script src="winter.js" defer></script>
 </body></html>
