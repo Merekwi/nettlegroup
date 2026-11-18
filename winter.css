@@ -1,0 +1,51 @@
+/* NETTLE GROUP · WINTER 2026 */
+:root{color-scheme:dark;--winter-ink:#eaf6fb;--winter-muted:#a9c3d0;--winter-night:#071923;--winter-deep:#0b2633;--winter-blue:#123b4c;--winter-ice:#b9ecf4;--winter-glow:#72d9e7;--winter-line:rgba(190,232,242,.17);--winter-glass:rgba(10,35,47,.72);--winter-shadow:0 24px 80px rgba(0,8,15,.38)}
+html{scroll-behavior:smooth;background:var(--winter-night)}
+body{position:relative;isolation:isolate;overflow-x:hidden;background:radial-gradient(ellipse at 50% -12%,rgba(68,155,178,.26),transparent 42%),linear-gradient(155deg,#071923 0%,#0a2634 46%,#102d3a 100%);color:var(--winter-ink)}
+body:before{content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;background:radial-gradient(ellipse at 12% 24%,rgba(99,198,215,.09),transparent 35%),radial-gradient(ellipse at 88% 68%,rgba(88,150,191,.09),transparent 34%);animation:winter-atmosphere 18s ease-in-out infinite alternate}
+body:after{content:"";position:fixed;inset:0;z-index:20;pointer-events:none;opacity:.16;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.14'/%3E%3C/svg%3E")}
+a{color:#aeeaf2;text-decoration-color:rgba(174,234,242,.35);text-underline-offset:4px;transition:color .25s,text-decoration-color .25s}
+a:hover{color:#fff;text-decoration-color:#fff}
+.nav,header.nav{background:rgba(5,22,31,.76)!important;border-bottom:1px solid var(--winter-line)!important;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);box-shadow:0 8px 32px rgba(0,0,0,.13)}
+.brand-type,.brand{color:#edfaff!important}.brand-type span{color:#8ddde8!important}
+.brand-mark{filter:drop-shadow(0 0 12px rgba(114,217,231,.4))}
+.brand-mark svg path{fill:#a8eaf0!important;stroke:#a8eaf0!important}
+nav a,.nav nav a{color:#c4dce5!important}
+.nav-button,.button,.btn,button,.account-button{border:1px solid rgba(173,231,241,.24)!important;background:linear-gradient(135deg,#c2f0f4,#75c9d8)!important;color:#09212b!important;box-shadow:0 8px 26px rgba(74,183,204,.16);transition:transform .25s,box-shadow .25s,filter .25s}
+.nav-button:hover,.button:hover,.btn:hover,button:hover,.account-button:hover{transform:translateY(-3px);box-shadow:0 14px 36px rgba(74,183,204,.28);filter:brightness(1.06)}
+main{position:relative}
+section,.card,.project-card,.feature,.panel,.account-panel,.account-item,.hero-card{border-color:var(--winter-line)!important}
+.card,.project-card,.feature,.panel,.account-panel,.account-item,.hero-card{background:linear-gradient(145deg,rgba(19,57,72,.78),rgba(8,31,42,.78))!important;color:var(--winter-ink)!important;box-shadow:var(--winter-shadow);backdrop-filter:blur(12px)}
+h1,h2,h3,h4,strong{color:#effaff}
+p,li,.muted,.account-intro,.account-muted{color:var(--winter-muted)}
+h1{ text-shadow:0 8px 36px rgba(91,197,217,.16);letter-spacing:-.045em}
+h1 em,.accent,.highlight{color:#8de0e9!important}
+input,select,textarea{background:rgba(4,22,31,.76)!important;color:#eafaff!important;border:1px solid rgba(171,224,235,.25)!important}
+input::placeholder,textarea::placeholder{color:#7d9eaa}
+footer{border-top:1px solid var(--winter-line)!important;color:#8eabb8!important}
+.hero,.home-hero,.hero-section{position:relative;isolation:isolate;overflow:hidden}
+.hero:before,.home-hero:before,.hero-section:before{content:"";position:absolute;inset:-20% -10% 18%;z-index:-1;pointer-events:none;background:radial-gradient(ellipse at 22% 44%,rgba(91,221,210,.28),transparent 36%),radial-gradient(ellipse at 70% 24%,rgba(91,159,220,.23),transparent 42%),radial-gradient(ellipse at 50% 65%,rgba(197,242,248,.1),transparent 48%);filter:blur(22px);animation:aurora-drift 15s ease-in-out infinite alternate}
+.hero:after,.home-hero:after,.hero-section:after{content:"";position:absolute;z-index:-1;left:-8%;right:-8%;bottom:-3px;height:125px;pointer-events:none;background:linear-gradient(180deg,transparent,rgba(190,233,243,.07)),radial-gradient(ellipse at 20% 100%,rgba(219,245,250,.16),transparent 42%),radial-gradient(ellipse at 78% 100%,rgba(174,222,238,.12),transparent 48%);clip-path:polygon(0 72%,9% 56%,17% 70%,26% 35%,35% 65%,45% 44%,55% 68%,66% 30%,76% 66%,86% 40%,100% 67%,100% 100%,0 100%)}
+.account-main{color:var(--winter-ink)!important}
+.account-kicker{color:#8de0e9!important}
+.account-panel{border-radius:24px!important}
+.account-item{border-radius:16px!important}
+.account-pill{background:rgba(128,198,212,.16)!important;color:#bcecf2!important}
+.account-pill.approved{background:rgba(115,190,147,.18)!important;color:#a7e7bd!important}
+.account-pill.rejected{background:rgba(219,120,111,.18)!important;color:#ffc0b8!important}
+.account-field{color:#b4ccd6!important}
+.account-sep{background:var(--winter-line)!important}
+.account-footer{color:#87a5b2!important}
+#loginPanel .account-muted{color:#a9c3d0}
+.winter-snow{position:fixed;inset:0;width:100%;height:100%;z-index:19;pointer-events:none;opacity:.76}
+.winter-orb{position:absolute;width:340px;height:340px;border-radius:50%;pointer-events:none;filter:blur(2px);background:radial-gradient(circle,rgba(140,226,237,.15),rgba(97,177,207,.045) 42%,transparent 70%);animation:orb-float 12s ease-in-out infinite alternate}
+.winter-ornament{position:absolute;pointer-events:none;color:rgba(188,235,243,.22);font-size:clamp(30px,5vw,64px);text-shadow:0 0 24px rgba(127,218,230,.2);animation:ornament-sway 8s ease-in-out infinite}
+.winter-reveal{opacity:0;transform:translateY(24px);transition:opacity .8s ease,transform .8s cubic-bezier(.2,.7,.2,1)}
+.winter-reveal.is-visible{opacity:1;transform:translateY(0)}
+::selection{background:#8de0e9;color:#06202b}
+@keyframes aurora-drift{0%{transform:translate3d(-3%,2%,0) rotate(-3deg) scale(1)}100%{transform:translate3d(4%,-3%,0) rotate(4deg) scale(1.13)}}
+@keyframes winter-atmosphere{0%{opacity:.65;transform:scale(1)}100%{opacity:1;transform:scale(1.08)}}
+@keyframes orb-float{0%{transform:translate3d(-12px,10px,0)}100%{transform:translate3d(28px,-24px,0)}}
+@keyframes ornament-sway{0%,100%{transform:rotate(-8deg) translateY(0)}50%{transform:rotate(8deg) translateY(-12px)}}
+@media(max-width:700px){.winter-snow{opacity:.58}.nav,header.nav{backdrop-filter:blur(16px)}.hero:after,.home-hero:after,.hero-section:after{height:75px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}.winter-snow{display:none}.winter-reveal{opacity:1;transform:none}}
