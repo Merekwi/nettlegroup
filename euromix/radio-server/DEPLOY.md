@@ -13,9 +13,9 @@ Before ordering, compare:
 - whether Docker is supported (avoid restricted LXC/OpenVZ containers);
 - snapshot/backup price.
 
-Create an A record for a dedicated hostname, for example `radio.your-domain.example`, pointing to the VPS IPv4 address. Add an AAAA record only when IPv6 is actually configured on the host. Do not copy the example hostname literally.
+Create two DNS A records pointing to the VPS IPv4 address: one for the public stream (for example `radio.example.com`) and one for the control API (for example `radio-control.example.com`). Add AAAA records only when IPv6 is actually configured. Do not copy these example domains literally. Both hostnames must resolve publicly before Caddy can obtain TLS certificates.
 
-Open the ports required by the AzuraCast installer and the configured public stream. Keep SSH restricted to the administrator's IP where practical. Do not put an unconfigured Cloudflare proxy in front of the audio stream.
+Open TCP ports 80 and 443 for Caddy, the configured stream ports required by AzuraCast, and SSH. Keep SSH restricted to the administrator's IP where practical. Do not proxy the public audio stream through an unconfigured CDN.
 
 ## 2. Install AzuraCast
 
@@ -29,7 +29,14 @@ sudo bash install-azuracast.sh
 
 The script downloads and runs the official AzuraCast Docker utility installer. Review the installer prompts. It is not a VPS purchase script and it does not change DNS or billing settings.
 
-After installation, open the hostname in a browser and complete the initial AzuraCast setup. Create a unique administrator password and store it in a password manager. Before enabling uploads, confirm the installed AzuraCast version is **0.23.6 or newer**. Versions through 0.23.5 are affected by CVE-2026-42605 in the Flow.js upload endpoint; the control API deliberately does not expose that endpoint.
+After installation, change AzuraCast's web ports so Caddy can own public 80/443:
+
+```bash
+cd /var/azuracast
+sudo ./docker.sh change-ports
+```
+
+Set HTTP to `8080` and HTTPS to `8443`, then apply the settings using the AzuraCast installer/update procedure. Caddy will reverse-proxy the stream hostname to HTTP port 8080 and the control hostname to the private API on port 8787. Complete the initial AzuraCast setup at the stream hostname. Create a unique administrator password and store it in a password manager. Before enabling uploads, confirm the installed AzuraCast version is **0.23.6 or newer**. Versions through 0.23.5 are affected by CVE-2026-42605 in the Flow.js upload endpoint; the control API deliberately does not expose that endpoint.
 
 Official installation instructions: https://www.azuracast.com/docs/getting-started/installation/docker/
 
@@ -89,7 +96,7 @@ cp .env.example .env
 nano .env
 ```
 
-Set the real values, including the pooled Neon `DATABASE_URL`, the existing NettleGroup `SESSION_SECRET`, the AzuraCast API base ending in `/api`, the station's numeric ID, and the AzuraCast API key. Set `EUROMIX_ALLOWED_ORIGIN` to the exact web origin used by the Euromix site. Do not commit `.env`.
+Set real `RADIO_DOMAIN` and `RADIO_CONTROL_DOMAIN` values first, then set the pooled Neon `DATABASE_URL`, the existing NettleGroup `SESSION_SECRET`, the AzuraCast API base ending in `/api`, the station's numeric ID, and the AzuraCast API key. Set `EUROMIX_ALLOWED_ORIGIN` to the exact web origin used by the Euromix site. Do not commit `.env`.
 
 Start and check the service:
 
@@ -99,7 +106,7 @@ docker compose logs --tail=100 euromix-radio-control
 curl -fsS http://127.0.0.1:8787/health
 ```
 
-The health endpoint must return `{\"ok\":true,...}`. Configure the host's existing HTTPS ingress to route a dedicated control hostname/path to `127.0.0.1:8787`. AzuraCast already owns its standard web ports in a normal installation, so do not start a second reverse proxy on ports 80/443 without first configuring the AzuraCast ingress deliberately. The public control endpoint must use HTTPS. The exact ingress rule depends on the selected host/domain setup and is intentionally not guessed here.
+The health endpoint must return `{\"ok\":true,...}`. The bundled Caddy service owns public ports 80/443 and obtains TLS certificates automatically once both DNS records point to the host. It routes the stream domain to AzuraCast on port 8080 and the control domain to `127.0.0.1:8787`. Keep AzuraCast's HTTPS backend port 8443 private and unused by the public clients.
 
 The service exposes public `GET /api/now-playing`, authenticated `GET /api/admin/station`, `GET /api/admin/files`, `GET /api/admin/playlists`, and a station-scoped file/playlist metadata proxy. Media upload uses a separate `POST /api/admin/upload` JSON endpoint that accepts a safe relative media path and base64 file data; it rejects path traversal, unsupported extensions and files larger than 18 MiB by default. This fits AzuraCast's documented default 25M PHP request limit and 50M NGINX request-body limit after base64 encoding. Larger individual files require raising the corresponding AzuraCast limits in `azuracast.env` and `.env`, then restarting the AzuraCast Docker Compose stack. It calls AzuraCast's JSON `POST /api/station/{station_id}/files` endpoint, not the vulnerable Flow.js `/files/upload` endpoint. Admin access is checked against the existing `user_profiles.is_admin` field on every request.
 
@@ -112,7 +119,7 @@ After the station is running:
 4. Save the API base URL, station ID/shortcode and stream URL in the server's private environment.
 5. Connect the Euromix control API to AzuraCast and NettleGroup's existing user database. That API must verify the existing Euromix bearer token and read the user's current `is_admin` value from the shared user profile table before allowing management actions.
 
-The app's current stream URL is intentionally blank. It should be changed only after the actual mount URL has been copied from the installed station and tested from an external network.
+The app's current stream URL is intentionally blank. After the DNS names are live, configure it to use the exact stream mount URL shown by AzuraCast (commonly `https://radio.example.com/listen/euromix/radio.mp3`). Set the radio-control base URL to `https://radio-control.example.com` only after `/health` succeeds through Caddy.
 
 To raise the per-file limit later, edit AzuraCast's `azuracast.env` (`PHP_MAX_FILE_SIZE`, `PHP_MEMORY_LIMIT`) and `.env` (`NGINX_CLIENT_MAX_BODY_SIZE`) together. Do not raise only the Euromix API limit: the AzuraCast reverse proxy or PHP process may still reject the body. AzuraCast documents restarting after environment edits with `docker-compose down` followed by `docker-compose up -d`; schedule this as a short maintenance window.
 
