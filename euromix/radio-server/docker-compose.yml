@@ -17,3 +17,27 @@ services:
     security_opt:
       - no-new-privileges:true
     init: true
+
+  caddy:
+    image: caddy:2
+    container_name: euromix-edge
+    restart: unless-stopped
+    environment:
+      RADIO_DOMAIN: ${RADIO_DOMAIN:?Set RADIO_DOMAIN in .env}
+      RADIO_CONTROL_DOMAIN: ${RADIO_CONTROL_DOMAIN:?Set RADIO_CONTROL_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  caddy_data:
+  caddy_config:
