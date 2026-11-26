@@ -38,7 +38,8 @@ data class RotationMemory(
     val recentGenres: List<String> = emptyList(),
     val songsSinceJingle: Int = 0,
     val lastJingleAt: Instant? = null,
-    val nextJingleAfterSongs: Int = 4
+    val nextJingleAfterSongs: Int = 4,
+    val scheduledKeysPlayedToday: Set<String> = emptySet()
 )
 
 object RotationPolicy {
@@ -58,7 +59,10 @@ object RotationPolicy {
         if (tracks.isEmpty()) return null
         val hour = now.atZone(zone).hour
 
-        val scheduled = jingles.firstOrNull { hour in it.scheduledHours }
+        val today = now.atZone(zone).toLocalDate().toString()
+        val scheduled = jingles.firstOrNull { jingle ->
+            hour in jingle.scheduledHours && "$today:${jingle.id}" !in memory.scheduledKeysPlayedToday
+        }
         if (scheduled != null && canPlayJingle(memory, now)) return RotationItem.Jingle(scheduled)
 
         val nextSong = pickTrack(tracks, memory, now, hour, random) ?: return null
