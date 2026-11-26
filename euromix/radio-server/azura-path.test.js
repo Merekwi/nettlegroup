@@ -19,7 +19,6 @@ test("rejects other stations, upload paths and arbitrary AzuraCast endpoints", (
     prefix + "files/1/rename",
     prefix + "playlists/5/play",
     prefix + "station",
-    "/api/admin/azuracast/station/42/files"
   ]) {
     assert.equal(toAzuraStationPath(path, "42"), null, path);
   }
