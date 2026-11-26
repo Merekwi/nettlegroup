@@ -77,7 +77,33 @@ AzuraCast documents general rotation, once-per-X-songs/minutes and scheduled pla
 
 The richer rotation policy in [ROTATION.md](../radio-engine/ROTATION.md) remains the target: track cooldowns, artist/genre cooldowns, weighted selection, dayparts and jingle precedence. Native AutoDJ settings are the first live baseline, not a claim that every custom rule is already implemented.
 
-## 6. API key and app integration
+## 6. Deploy the private Euromix control API
+
+The control service runs separately from AzuraCast and connects to the same Neon user table. It listens only on `127.0.0.1:8787` on the host; do not expose that port directly to the internet.
+
+After the station exists, copy the folder to the VPS (or pull the repository) and create a private `.env` file:
+
+```bash
+cd nettlegroup/euromix/radio-server
+cp .env.example .env
+nano .env
+```
+
+Set the real values, including the pooled Neon `DATABASE_URL`, the existing NettleGroup `SESSION_SECRET`, the AzuraCast API base ending in `/api`, the station's numeric ID, and the AzuraCast API key. Set `EUROMIX_ALLOWED_ORIGIN` to the exact web origin used by the Euromix site. Do not commit `.env`.
+
+Start and check the service:
+
+```bash
+docker compose up --build -d
+docker compose logs --tail=100 euromix-radio-control
+curl -fsS http://127.0.0.1:8787/health
+```
+
+The health endpoint must return `{\"ok\":true,...}`. Configure the host's existing HTTPS ingress to route a dedicated control hostname/path to `127.0.0.1:8787`. AzuraCast already owns its standard web ports in a normal installation, so do not start a second reverse proxy on ports 80/443 without first configuring the AzuraCast ingress deliberately. The public control endpoint must use HTTPS. The exact ingress rule depends on the selected host/domain setup and is intentionally not guessed here.
+
+The service exposes public `GET /api/now-playing`, authenticated `GET /api/admin/station`, and an authenticated, station-scoped proxy under `/api/admin/azuracast/station/{station_id}/files` and `/playlists`. Admin access is checked against the existing `user_profiles.is_admin` field on every request.
+
+## 7. API key and app integration
 
 After the station is running:
 1. Create a restricted station-management user for the radio integration.
@@ -88,7 +114,7 @@ After the station is running:
 
 The app's current stream URL is intentionally blank. It should be changed only after the actual mount URL has been copied from the installed station and tested from an external network.
 
-## 7. Backups and operations
+## 8. Backups and operations
 
 - Back up station configuration and media to storage outside the VPS. A disk snapshot on the same host is not a complete backup.
 - Keep at least one restore test, not just a backup file.
