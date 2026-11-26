@@ -36,7 +36,7 @@ cd /var/azuracast
 sudo ./docker.sh change-ports
 ```
 
-Set HTTP to `8080` and HTTPS to `8443`, then apply the settings using the AzuraCast installer/update procedure. Caddy will reverse-proxy the stream hostname to HTTP port 8080 and the control hostname to the private API on port 8787. Complete the initial AzuraCast setup at the stream hostname. Create a unique administrator password and store it in a password manager. Before enabling uploads, confirm the installed AzuraCast version is **0.23.6 or newer**. Versions through 0.23.5 are affected by CVE-2026-42605 in the Flow.js upload endpoint; the control API deliberately does not expose that endpoint.
+Set HTTP to `8080` and HTTPS to `8443`. Then restart the AzuraCast stack from `/var/azuracast` using `sudo docker-compose down` followed by `sudo docker-compose up -d`. Caddy will reverse-proxy the stream hostname to HTTP port 8080 and the control hostname to the private API on port 8787. Complete the initial AzuraCast setup at the stream hostname. Create a unique administrator password and store it in a password manager. Before enabling uploads, confirm the installed AzuraCast version is **0.23.6 or newer**. Versions through 0.23.5 are affected by CVE-2026-42605 in the Flow.js upload endpoint; the control API deliberately does not expose that endpoint.
 
 Official installation instructions: https://www.azuracast.com/docs/getting-started/installation/docker/
 
@@ -49,12 +49,12 @@ In AzuraCast:
 4. Configure one public MP3 mount point, initially 128 kbit/s. This is a practical starting point, not a fixed limit.
 5. Enable AutoDJ and verify the station is broadcasting continuously even when there are zero listeners.
 
-Use the actual stream URL displayed by AzuraCast after the mount is created. The common path shape is `https://radio.your-domain.example/listen/euromix/radio.mp3`, but the authoritative URL is the one shown by the station's own administration page. Do not put an invented URL into the Android app.
+Use the actual stream URL displayed by AzuraCast after the mount is created. The common path shape is `https://radio.example.com/listen/euromix/radio.mp3`, but the authoritative URL is the one shown by the station's own administration page. Do not put an invented URL into the Android app.
 
 The public now-playing endpoint should be available at:
 
 ```
-https://radio.your-domain.example/api/nowplaying/euromix
+https://radio.example.com/api/nowplaying/euromix
 ```
 
 Verify it returns the station and current-track data before integrating it into Android.
