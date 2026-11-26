@@ -1,0 +1,42 @@
+name: Euromix radio control checks
+
+on:
+  push:
+    branches: [main, "euromix/**"]
+    paths:
+      - "euromix/radio-server/**"
+      - ".github/workflows/euromix-radio-control.yml"
+  pull_request:
+    paths:
+      - "euromix/radio-server/**"
+      - ".github/workflows/euromix-radio-control.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        working-directory: euromix/radio-server
+        run: npm install --no-audit --no-fund
+      - name: Verify token tests
+        working-directory: euromix/radio-server
+        run: npm test
+      - name: Check JavaScript syntax
+        working-directory: euromix/radio-server
+        run: |
+          node --check auth.js
+          node --check media.js
+          node --check server.js
+      - name: Build control API container
+        working-directory: euromix/radio-server
+        run: docker build --tag euromix-radio-control:ci .
