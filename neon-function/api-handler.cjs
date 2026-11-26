@@ -79,15 +79,27 @@ function issue(payload) {
   return data+"."+sig;
 }
 function session(req) {
-  const raw = (req.headers.cookie || "").split(";").map(v=>v.trim()).find(v=>v.startsWith(COOKIE+"="));
-  if (!raw || !process.env.SESSION_SECRET) return null;
-  let token; try { token = decodeURIComponent(raw.slice(COOKIE.length+1)); } catch (_) { return null; }
+  if (!process.env.SESSION_SECRET) return null;
+  const authorization = String(req.headers.authorization || "");
+  const isBearer = /^Bearer\s+/i.test(authorization);
+  let token = "";
+  if (isBearer) token = authorization.replace(/^Bearer\s+/i, "").trim();
+  else {
+    const raw = (req.headers.cookie || "").split(";").map(v=>v.trim()).find(v=>v.startsWith(COOKIE+"="));
+    if (!raw) return null;
+    try { token = decodeURIComponent(raw.slice(COOKIE.length+1)); } catch (_) { return null; }
+  }
   const parts = token.split(".");
   if (parts.length !== 2) return null;
   const expected = crypto.createHmac("sha256",process.env.SESSION_SECRET).update(parts[0]).digest();
   const actual = Buffer.from(parts[1],"base64url");
   if (actual.length !== expected.length || !crypto.timingSafeEqual(actual,expected)) return null;
-  try { const p=JSON.parse(Buffer.from(parts[0],"base64url").toString()); return p.exp > Math.floor(Date.now()/1000) && /^\d{1,20}$/.test(String(p.tg)) ? String(p.tg) : null; } catch (_) { return null; }
+  try {
+    const p=JSON.parse(Buffer.from(parts[0],"base64url").toString());
+    if (!(p.exp > Math.floor(Date.now()/1000)) || !/^\d{1,20}$/.test(String(p.tg))) return null;
+    if (p.aud && (p.aud !== "euromix" || !isBearer)) return null;
+    return String(p.tg);
+  } catch (_) { return null; }
 }
 async function userFor(req) {
   const id = session(req); if (!id) return null;
@@ -2167,6 +2179,32 @@ async function main(req,res,forcedPath) {
     const u=await userFor(req);
     return out(res,200,{authenticated:!!u,user:u?{id:u.id,telegramId:u.telegram_id,username:u.telegram_username,displayName:u.display_name,isAdmin:u.is_admin}:null});
   }
+  if (path === "/api/auth/mobile/code" && req.method === "POST") {
+    if (!sameOrigin(req)) return out(res,403,{error:"origin_check_failed"});
+    const u=await userFor(req);
+    if (!u) return out(res,401,{error:"authentication_required"});
+    const code=crypto.randomBytes(32).toString("base64url");
+    const codeHash=crypto.createHash("sha256").update(code).digest("hex");
+    await pool.query(
+      "INSERT INTO public.euromix_auth_codes(code_hash,telegram_id,expires_at) VALUES($1,$2,now()+interval '90 seconds')",
+      [codeHash,u.telegram_id]
+    );
+    return out(res,200,{code,expiresIn:90});
+  }
+  if (path === "/api/auth/mobile/exchange" && req.method === "POST") {
+    const d=await readBody(req), code=txt(d.code,128);
+    if (!/^[A-Za-z0-9_-]{40,64}$/.test(code)) return out(res,400,{error:"invalid_or_expired_code"});
+    const codeHash=crypto.createHash("sha256").update(code).digest("hex");
+    const redeemed=await pool.query(
+      "WITH used AS (UPDATE public.euromix_auth_codes SET consumed_at=now() WHERE code_hash=$1 AND consumed_at IS NULL AND expires_at>now() RETURNING telegram_id) SELECT u.id,u.telegram_id::text,u.telegram_username,u.display_name,u.is_admin FROM used x JOIN public.user_profiles u ON u.telegram_id=x.telegram_id",
+      [codeHash]
+    );
+    if (!redeemed.rowCount) return out(res,401,{error:"invalid_or_expired_code"});
+    const u=redeemed.rows[0];
+    const accessToken=issue({tg:u.telegram_id,aud:"euromix",exp:Math.floor(Date.now()/1000)+30*24*60*60});
+    return out(res,200,{accessToken,tokenType:"Bearer",expiresIn:30*24*60*60,user:{id:u.id,telegramId:u.telegram_id,username:u.telegram_username,displayName:u.display_name,isAdmin:u.is_admin}});
+  }
+
   if (path === "/api/services" && req.method === "GET") {
     const r=await pool.query("SELECT id,slug,title,description,price_label,duration_days FROM public.service_catalog WHERE is_active=true ORDER BY sort_order,id");
     return out(res,200,{services:r.rows});
