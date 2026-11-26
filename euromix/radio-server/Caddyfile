@@ -1,0 +1,9 @@
+{$RADIO_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy host.docker.internal:8080
+}
+
+{$RADIO_CONTROL_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy host.docker.internal:8787
+}
