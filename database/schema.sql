@@ -91,3 +91,17 @@ CREATE INDEX IF NOT EXISTS payment_tickets_user_created_idx ON public.payment_ti
 CREATE INDEX IF NOT EXISTS payment_tickets_status_created_idx ON public.payment_tickets(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS service_grants_user_status_idx ON public.service_grants(user_id, status, expires_at);
 CREATE INDEX IF NOT EXISTS audit_logs_created_idx ON public.audit_logs(created_at DESC);
+
+-- Euromix native app sign-in codes. See migration
+-- database/migrations/2026-11-26-euromix-auth-codes.sql.
+CREATE TABLE IF NOT EXISTS public.euromix_auth_codes (
+  code_hash TEXT PRIMARY KEY,
+  telegram_id BIGINT NOT NULL REFERENCES public.user_profiles(telegram_id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS euromix_auth_codes_expiry_idx
+  ON public.euromix_auth_codes (expires_at)
+  WHERE consumed_at IS NULL;
