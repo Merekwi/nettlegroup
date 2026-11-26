@@ -1,0 +1,206 @@
+import http from "node:http";
+import { Readable } from "node:stream";
+import { Pool } from "pg";
+import { verifyEuromixToken } from "./auth.js";
+
+const PORT = Number(process.env.PORT || 8787);
+const SESSION_SECRET = process.env.SESSION_SECRET || "";
+const DATABASE_URL = process.env.DATABASE_URL || "";
+const AZURACAST_API_URL = (process.env.EUROMIX_AZURACAST_API_URL || "").replace(/\/+$/, "");
+const AZURACAST_API_KEY = process.env.AZURACAST_API_KEY || "";
+const STATION_ID = String(process.env.EUROMIX_AZURACAST_STATION_ID || "");
+const STATION_SHORTCODE = process.env.EUROMIX_AZURACAST_STATION_SHORTCODE || "euromix";
+const ALLOWED_ORIGIN = process.env.EUROMIX_ALLOWED_ORIGIN || "https://www.nettlegroup.space";
+const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 250 * 1024 * 1024);
+
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error("PORT is invalid");
+if (!SESSION_SECRET || SESSION_SECRET.length < 32) throw new Error("SESSION_SECRET must be at least 32 characters");
+if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
+if (!AZURACAST_API_URL || !AZURACAST_API_KEY || !/^\d+$/.test(STATION_ID)) {
+  throw new Error("AzuraCast API URL, API key and numeric station ID are required");
+}
+const apiUrl = new URL(AZURACAST_API_URL);
+if (apiUrl.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(apiUrl.hostname)) {
+  throw new Error("AzuraCast API must use HTTPS");
+}
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  max: 5,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+  application_name: "euromix-radio-control"
+});
+
+const json = (res, status, data, extraHeaders = {}) => {
+  const body = Buffer.from(JSON.stringify(data));
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": body.length,
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+    ...extraHeaders
+  });
+  res.end(body);
+};
+
+function applyCors(req, res) {
+  const origin = req.headers.origin;
+  if (origin && origin !== ALLOWED_ORIGIN) {
+    json(res, 403, { error: "origin_not_allowed" });
+    return false;
+  }
+  if (origin === ALLOWED_ORIGIN) {
+    res.setHeader("access-control-allow-origin", ALLOWED_ORIGIN);
+    res.setHeader("vary", "Origin");
+    res.setHeader("access-control-allow-headers", "Authorization, Content-Type, Accept");
+    res.setHeader("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  }
+  return true;
+}
+
+async function adminTelegramId(req) {
+  const header = String(req.headers.authorization || "");
+  const match = /^Bearer\s+([^\s]+)$/i.exec(header);
+  if (!match) return null;
+  const identity = verifyEuromixToken(match[1], SESSION_SECRET);
+  if (!identity) return null;
+
+  const result = await pool.query(
+    "SELECT is_admin FROM public.user_profiles WHERE telegram_id = $1 LIMIT 1",
+    [identity.telegramId]
+  );
+  return result.rows[0]?.is_admin === true ? identity.telegramId : null;
+}
+
+async function fetchAzura(path, options = {}) {
+  const url = new URL(path.replace(/^\/+/, ""), AZURACAST_API_URL + "/");
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      accept: "application/json",
+      authorization: "Bearer " + AZURACAST_API_KEY,
+      ...(options.headers || {})
+    },
+    signal: AbortSignal.timeout(20_000)
+  });
+  return response;
+}
+
+function safeAzuraPath(pathname) {
+  const prefix = "/api/admin/azuracast/station/";
+  if (!pathname.startsWith(prefix)) return null;
+  const tail = pathname.slice(prefix.length);
+  const match = /^(\d+)\/(files|playlists)(?:\/([A-Za-z0-9._/-]*))?$/.exec(tail);
+  if (!match || match[1] !== STATION_ID) return null;
+  const remainder = match[3] || "";
+  if (remainder.split("/").some(part => part === "." || part === "..")) return null;
+  return "station/" + STATION_ID + "/" + match[2] + (remainder ? "/" + remainder : "");
+}
+
+async function proxyAdminRequest(req, res, pathname, search) {
+  const relativePath = safeAzuraPath(pathname);
+  if (!relativePath) return json(res, 404, { error: "route_not_found" });
+
+  const method = req.method || "GET";
+  if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    return json(res, 405, { error: "method_not_allowed" });
+  }
+
+  const contentType = String(req.headers["content-type"] || "");
+  const contentLength = Number(req.headers["content-length"] || 0);
+  if (contentLength > MAX_UPLOAD_BYTES) {
+    return json(res, 413, { error: "upload_too_large", maxBytes: MAX_UPLOAD_BYTES });
+  }
+
+  const headers = {};
+  if (contentType) headers["content-type"] = contentType;
+  if (req.headers.accept) headers.accept = String(req.headers.accept);
+
+  const init = { method, headers };
+  if (!["GET", "HEAD"].includes(method)) {
+    init.body = req;
+    init.duplex = "half";
+  }
+
+  const upstream = await fetchAzura(relativePath + search, init);
+  res.writeHead(upstream.status, {
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+    ...(upstream.headers.get("content-type") ? { "content-type": upstream.headers.get("content-type") } : {}),
+    ...(upstream.headers.get("content-length") ? { "content-length": upstream.headers.get("content-length") } : {})
+  });
+  if (!upstream.body) return res.end();
+  Readable.fromWeb(upstream.body).pipe(res);
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    if (!applyCors(req, res)) return;
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, { "cache-control": "no-store" });
+      return res.end();
+    }
+
+    const requestUrl = new URL(req.url || "/", "http://localhost");
+    const pathname = requestUrl.pathname;
+
+    if (req.method === "GET" && pathname === "/health") {
+      await pool.query("SELECT 1");
+      return json(res, 200, { ok: true, service: "euromix-radio-control" });
+    }
+
+    if (req.method === "GET" && pathname === "/api/now-playing") {
+      const result = await fetchAzura("nowplaying/" + encodeURIComponent(STATION_SHORTCODE), {
+        headers: { accept: "application/json" }
+      });
+      const body = await result.text();
+      res.writeHead(result.status, {
+        "content-type": result.headers.get("content-type") || "application/json",
+        "cache-control": "public, max-age=3, stale-while-revalidate=5",
+        "x-content-type-options": "nosniff"
+      });
+      return res.end(body);
+    }
+
+    if (pathname.startsWith("/api/admin/")) {
+      const telegramId = await adminTelegramId(req);
+      if (!telegramId) return json(res, 403, { error: "admin_access_required" });
+
+      if (req.method === "GET" && pathname === "/api/admin/station") {
+        const result = await fetchAzura("station/" + STATION_ID);
+        const body = await result.text();
+        res.writeHead(result.status, {
+          "content-type": result.headers.get("content-type") || "application/json",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff"
+        });
+        return res.end(body);
+      }
+
+      return await proxyAdminRequest(req, res, pathname, requestUrl.search);
+    }
+
+    return json(res, 404, { error: "route_not_found" });
+  } catch (error) {
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    const unavailable = error?.name === "TimeoutError" || error?.name === "AbortError";
+    json(res, unavailable ? 504 : 502, {
+      error: unavailable ? "radio_engine_timeout" : "radio_engine_unavailable"
+    });
+  }
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  process.stdout.write("Euromix radio-control listening on port " + PORT + "\n");
+});
+
+async function shutdown() {
+  server.close();
+  await pool.end().catch(() => {});
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
