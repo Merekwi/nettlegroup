@@ -178,6 +178,24 @@ const server = http.createServer(async (req, res) => {
         return res.end(body);
       }
 
+      // Friendly routes for the Euromix admin UI. The station ID is kept
+      // server-side and callers cannot select another AzuraCast station.
+      if (req.method === "GET" && pathname === "/api/admin/files") {
+        return await proxyAdminRequest(req, res, "/api/admin/azuracast/station/" + STATION_ID + "/files", requestUrl.search);
+      }
+      if (req.method === "GET" && pathname === "/api/admin/playlists") {
+        return await proxyAdminRequest(req, res, "/api/admin/azuracast/station/" + STATION_ID + "/playlists", requestUrl.search);
+      }
+      if (req.method === "POST" && pathname === "/api/admin/upload") {
+        return await proxyAdminRequest(req, res, "/api/admin/azuracast/station/" + STATION_ID + "/files/upload", requestUrl.search);
+      }
+      const mediaAction = /^\\/api\\/admin\\/(files|playlists)\\/(\\d+)(?:\\/(play))?$/.exec(pathname);
+      if (mediaAction) {
+        const [, resource, id, action] = mediaAction;
+        const path = "/api/admin/azuracast/station/" + STATION_ID + "/" + resource + "/" + id + (action ? "/" + action : "");
+        return await proxyAdminRequest(req, res, path, requestUrl.search);
+      }
+
       return await proxyAdminRequest(req, res, pathname, requestUrl.search);
     }
 
