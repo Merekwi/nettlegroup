@@ -2,6 +2,7 @@ package space.euromix.app
 
 import android.content.Intent
 import android.content.Context
+import android.content.ComponentName
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -41,7 +42,10 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
+import java.util.concurrent.Executor
 
 private val Accent = Color(0xFFFF5C9A)
 private val Violet = Color(0xFF9275FF)
@@ -103,7 +107,8 @@ private object SecureTokenStore {
 }
 
 class MainActivity : ComponentActivity() {
-    private lateinit var player: ExoPlayer
+    private var player by mutableStateOf<MediaController?>(null)
+    private var controllerFuture: ListenableFuture<MediaController>? = null
     private val http = OkHttpClient()
     private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var accessToken: String? = null
@@ -115,16 +120,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         accessToken = SecureTokenStore.read(this)
-        player = ExoPlayer.Builder(this).build()
+        connectPlaybackService()
         val incomingCode = intent?.data?.getQueryParameter("code")
         if (!incomingCode.isNullOrBlank()) {
             consumeAuthCode(incomingCode)
         } else if (accessToken != null) {
             refreshSession()
-        }
-        if (Config.STREAM_URL.isNotBlank()) {
-            player.setMediaItem(MediaItem.fromUri(Config.STREAM_URL))
-            player.prepare()
         }
         setContent {
             var playing by remember { mutableStateOf(false) }
@@ -134,12 +135,17 @@ class MainActivity : ComponentActivity() {
             var trackArtist by remember { mutableStateOf("Euromix Radio") }
 
             DisposableEffect(player) {
-                val listener = object : Player.Listener {
-                    override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
-                    override fun onPlayerError(error: PlaybackException) { notice = "Не удалось подключиться к эфиру" }
+                val activePlayer = player
+                if (activePlayer == null) {
+                    onDispose { }
+                } else {
+                    val listener = object : Player.Listener {
+                        override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
+                        override fun onPlayerError(error: PlaybackException) { notice = "Не удалось подключиться к эфиру" }
+                    }
+                    activePlayer.addListener(listener)
+                    onDispose { activePlayer.removeListener(listener) }
                 }
-                player.addListener(listener)
-                onDispose { player.removeListener(listener) }
             }
 
             MaterialTheme(colorScheme = darkColorScheme(
@@ -160,13 +166,13 @@ class MainActivity : ComponentActivity() {
                             )
                             "admin" -> if (adminState) AdminPage() else RadioPage(
                                 playing, notice, trackTitle, trackArtist,
-                                onToggle = { if (Config.STREAM_URL.isNotBlank()) { if (player.isPlaying) player.pause() else player.play() } }
+                                onToggle = { player?.let { if (it.isPlaying) it.pause() else it.play() } }
                             )
                             else -> RadioPage(
                                 playing, notice, trackTitle, trackArtist,
                                 onToggle = {
                                     if (Config.STREAM_URL.isBlank()) notice = "Прямой эфир скоро появится"
-                                    else if (player.isPlaying) player.pause() else player.play()
+                                    else player?.let { if (it.isPlaying) it.pause() else it.play() }
                                 }
                             )
                         }
@@ -275,9 +281,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun connectPlaybackService() {
+        val token = SessionToken(this, ComponentName(this, PlaybackService::class.java))
+        val future = MediaController.Builder(this, token).buildAsync()
+        controllerFuture = future
+        future.addListener({
+            try {
+                player = future.get()
+            } catch (_: Exception) {
+                authNoticeState = "Не удалось подключить аудиоплеер"
+            }
+        }, Executor { command -> runOnUiThread(command) })
+    }
+
     override fun onDestroy() {
         activityScope.cancel()
-        player.release()
+        controllerFuture?.let { MediaController.releaseFuture(it) }
+        controllerFuture = null
+        player = null
         super.onDestroy()
     }
 }
