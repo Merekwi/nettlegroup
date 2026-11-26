@@ -6,36 +6,50 @@
 <meta name="theme-color" content="#11101c">
 <title>Euromix · NettleGroup Verify</title>
 <style>
-*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 50% 15%,#35245b 0,#171426 42%,#0b0b12 100%);color:#fff;font:16px system-ui,-apple-system,Segoe UI,sans-serif}.card{width:min(100%,440px);padding:34px 26px;border:1px solid #ffffff20;border-radius:26px;background:#171523eF;box-shadow:0 24px 80px #0008;text-align:center}.logo{font-weight:900;letter-spacing:.22em;font-size:23px}.logo span{color:#bd9cff}.sub{color:#aaa5bc;line-height:1.6;font-size:14px;margin:12px 0 28px}.slot{min-height:52px;display:flex;justify-content:center;align-items:center}.status{margin-top:22px;min-height:42px;color:#b9b3ca;font-size:13px;line-height:1.5}.status.error{color:#ff9eaa}.status.ok{color:#a7e6bd}.spinner{width:18px;height:18px;border:2px solid #ffffff30;border-top-color:#bd9cff;border-radius:50%;display:inline-block;animation:spin .8s linear infinite;vertical-align:middle;margin-right:8px}@keyframes spin{to{transform:rotate(360deg)}}.foot{margin-top:30px;color:#716b82;font-size:10px;letter-spacing:.12em}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 50% 15%,#35245b 0,#171426 42%,#0b0b12 100%);color:#fff;font:16px system-ui,-apple-system,Segoe UI,sans-serif}.card{width:min(100%,440px);padding:34px 26px;border:1px solid #ffffff20;border-radius:26px;background:#171523ef;box-shadow:0 24px 80px #0008;text-align:center}.logo{font-weight:900;letter-spacing:.22em;font-size:23px}.logo span{color:#bd9cff}.sub{color:#aaa5bc;line-height:1.6;font-size:14px;margin:12px 0 28px}.slot{min-height:52px;display:flex;justify-content:center;align-items:center}.status{margin-top:22px;min-height:42px;color:#b9b3ca;font-size:13px;line-height:1.5}.status.error{color:#ff9eaa}.status.ok{color:#a7e6bd}.spinner{width:18px;height:18px;border:2px solid #ffffff30;border-top-color:#bd9cff;border-radius:50%;display:inline-block;animation:spin .8s linear infinite;vertical-align:middle;margin-right:8px}@keyframes spin{to{transform:rotate(360deg)}}.foot{margin-top:30px;color:#716b82;font-size:10px;letter-spacing:.12em}
 </style>
 </head>
 <body>
 <main class="card">
   <div class="logo">EURO<span>MIX</span></div>
-  <p class="sub">Вход через единую систему идентификации <b>NettleGroup Verify</b>.<br>Пароль от Telegram не требуется.</p>
+  <p class="sub">Вход через единую систему <b>NettleGroup Verify</b>.<br>Подтвердите аккаунт Telegram, чтобы вернуться в приложение.</p>
   <div id="widget" class="slot"></div>
-  <div id="status" class="status">Подтвердите вход через Telegram, чтобы продолжить.</div>
+  <div id="status" class="status">Ожидаем подтверждение через Telegram.</div>
   <div class="foot">SECURE SIGN-IN · NETTLE GROUP</div>
 </main>
 <script>
 const API="https://api.nettlegroup.space";
 const statusEl=document.getElementById("status");
+let busy=false;
 function status(message,kind=""){statusEl.className="status "+kind;statusEl.textContent=message;}
 window.onTelegramAuth=async function(user){
-  status("Проверяем подпись NettleGroup Verify…");
+  if(busy)return;
+  busy=true;
+  const widget=document.getElementById("widget");
+  widget.innerHTML='<span class="spinner"></span>';
+  status("Проверяем подпись Telegram…");
   try{
-    const response=await fetch(API+"/api/auth/telegram",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify(user)});
+    const response=await fetch(API+"/api/auth/telegram",{
+      method:"POST",credentials:"include",cache:"no-store",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify(user)
+    });
     const data=await response.json().catch(()=>({}));
-    if(!response.ok)throw new Error(data.error||"Не удалось подтвердить Telegram");
-    const sessionResponse=await fetch(API+"/api/session",{credentials:"include",cache:"no-store"});
-    const session=await sessionResponse.json();
-    if(!sessionResponse.ok||!session.authenticated||!session.user)throw new Error("Сессия не создана");
+    if(!response.ok)throw new Error(data.error||"Не удалось подтвердить аккаунт");
+    status("Создаём защищённую сессию для приложения…");
+    const codeResponse=await fetch(API+"/api/auth/mobile/code",{
+      method:"POST",credentials:"include",cache:"no-store",
+      headers:{"Content-Type":"application/json"},body:"{}"
+    });
+    const codeData=await codeResponse.json().catch(()=>({}));
+    if(!codeResponse.ok||!codeData.code)throw new Error(codeData.error||"Не удалось связать аккаунт с приложением");
     status("Вход подтверждён. Возвращаемся в Euromix…","ok");
-    if(window.EuromixAuth&&typeof window.EuromixAuth.onAuthenticated==="function"){
-      window.EuromixAuth.onAuthenticated(JSON.stringify(session.user));
-    }
-    setTimeout(()=>{try{window.location.href="euromix://auth/success";}catch(_){}},500);
-  }catch(error){status("Ошибка входа: "+error.message,"error");}
+    window.location.replace("euromix://auth/success?code="+encodeURIComponent(codeData.code));
+    setTimeout(()=>status("Не удалось открыть приложение. Вернитесь в Euromix вручную и повторите вход.","error"),2500);
+  }catch(error){
+    busy=false;
+    widget.innerHTML="";
+    status("Не получилось войти: "+error.message,"error");
+  }
 };
 const script=document.createElement("script");
 script.src="https://telegram.org/js/telegram-widget.js?22";
