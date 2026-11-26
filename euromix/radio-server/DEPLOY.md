@@ -96,7 +96,7 @@ cp .env.example .env
 nano .env
 ```
 
-Set real `RADIO_DOMAIN` and `RADIO_CONTROL_DOMAIN` values first, then set the pooled Neon `DATABASE_URL`, the existing NettleGroup `SESSION_SECRET`, the AzuraCast API base ending in `/api`, the station's numeric ID, and the AzuraCast API key. Set `EUROMIX_ALLOWED_ORIGIN` to the exact web origin used by the Euromix site. Do not commit `.env`.
+Set real `RADIO_DOMAIN` and `RADIO_CONTROL_DOMAIN` values first, then set the pooled Neon `DATABASE_URL`, the existing NettleGroup `SESSION_SECRET`, the private AzuraCast API base `http://host.docker.internal:8080/api`, the station's numeric ID, and the AzuraCast API key. The `host.docker.internal` address is reachable only from the Docker network and keeps server-to-server API calls off the public stream hostname. Set `EUROMIX_ALLOWED_ORIGIN` to the exact web origin used by the Euromix site. Do not commit `.env`.
 
 Start and check the service:
 
