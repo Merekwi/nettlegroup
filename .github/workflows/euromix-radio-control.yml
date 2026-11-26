@@ -35,6 +35,7 @@ jobs:
         working-directory: euromix/radio-server
         run: |
           node --check auth.js
+          node --check media.js
           node --check server.js
       - name: Build control API container
         working-directory: euromix/radio-server
