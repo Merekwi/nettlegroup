@@ -103,7 +103,7 @@ Start and check the service:
 ```bash
 docker compose up --build -d
 docker compose logs --tail=100 euromix-radio-control
-curl -fsS http://127.0.0.1:8787/health
+curl -fsS https://radio-control.example.com/health
 ```
 
 The health endpoint must return `{\"ok\":true,...}`. The bundled Caddy service owns public ports 80/443 and obtains TLS certificates automatically once both DNS records point to the host. It routes the stream domain to AzuraCast on port 8080 and the control domain to `127.0.0.1:8787`. Keep AzuraCast's HTTPS backend port 8443 private and unused by the public clients.
