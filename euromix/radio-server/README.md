@@ -19,7 +19,7 @@ AzuraCast is the radio engine, not the public Euromix brand. The long-term contr
 - `install-azuracast.sh`: official installer bootstrap for a fresh Linux VPS.
 - `DEPLOY.md`: initial server and station setup checklist.
 - `.env.example`: names and examples for values that will be needed when the server is provisioned. It contains no secrets.
-- `server.js` / `auth.js`: the private radio-control API and shared-token verifier.
+- `server.js` / `auth.js`: the private radio-control API and shared-token verifier. The upload API validates relative paths and file types and does not expose AzuraCast's Flow.js upload endpoint.
 - `docker-compose.yml` / `Dockerfile`: container definition for the control API.
 - `auth.test.js`: automated checks for token verification.
 
