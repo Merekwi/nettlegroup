@@ -189,9 +189,18 @@ const server = http.createServer(async (req, res) => {
       if (req.method === "POST" && pathname === "/api/admin/upload") {
         return await proxyAdminRequest(req, res, "/api/admin/azuracast/station/" + STATION_ID + "/files/upload", requestUrl.search);
       }
-      const mediaAction = /^\\/api\\/admin\\/(files|playlists)\\/(\\d+)(?:\\/(play))?$/.exec(pathname);
-      if (mediaAction) {
-        const [, resource, id, action] = mediaAction;
+      const mediaParts = pathname.split("/");
+      if (
+        (mediaParts.length === 5 || mediaParts.length === 6) &&
+        mediaParts[1] === "api" &&
+        mediaParts[2] === "admin" &&
+        ["files", "playlists"].includes(mediaParts[3]) &&
+        /^[0-9]+$/.test(mediaParts[4]) &&
+        (mediaParts.length === 5 || mediaParts[5] === "play")
+      ) {
+        const resource = mediaParts[3];
+        const id = mediaParts[4];
+        const action = mediaParts[5] || "";
         const path = "/api/admin/azuracast/station/" + STATION_ID + "/" + resource + "/" + id + (action ? "/" + action : "");
         return await proxyAdminRequest(req, res, path, requestUrl.search);
       }
