@@ -46,4 +46,6 @@ jobs:
         env:
           RADIO_DOMAIN: radio.example.com
           RADIO_CONTROL_DOMAIN: radio-control.example.com
-        run: docker compose config --quiet
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
