@@ -15,7 +15,7 @@ Before ordering, compare:
 
 Create two DNS A records pointing to the VPS IPv4 address: one for the public stream (for example `radio.example.com`) and one for the control API (for example `radio-control.example.com`). Add AAAA records only when IPv6 is actually configured. Do not copy these example domains literally. Both hostnames must resolve publicly before Caddy can obtain TLS certificates.
 
-Open TCP ports 80 and 443 for Caddy, the configured stream ports required by AzuraCast, and SSH. Keep SSH restricted to the administrator's IP where practical. Do not proxy the public audio stream through an unconfigured CDN.
+At the VPS provider's firewall, allow SSH (preferably only from the administrator's IP), TCP 80/443 and UDP 443. Do not expose AzuraCast's backend ports 8080/8443, SFTP 2022 or direct station ports 8000-8499 to the public internet; Caddy forwards listener traffic through the 80/443 web proxy. Direct DJ streaming/SFTP can be enabled later by opening only the specific ports actually required.
 
 ## 2. Install AzuraCast
 
