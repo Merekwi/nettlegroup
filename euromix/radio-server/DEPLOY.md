@@ -29,7 +29,7 @@ sudo bash install-azuracast.sh
 
 The script downloads and runs the official AzuraCast Docker utility installer. Review the installer prompts. It is not a VPS purchase script and it does not change DNS or billing settings.
 
-After installation, open the hostname in a browser and complete the initial AzuraCast setup. Create a unique administrator password and store it in a password manager.
+After installation, open the hostname in a browser and complete the initial AzuraCast setup. Create a unique administrator password and store it in a password manager. Before enabling uploads, confirm the installed AzuraCast version is **0.23.6 or newer**. Versions through 0.23.5 are affected by CVE-2026-42605 in the Flow.js upload endpoint; the control API deliberately does not expose that endpoint.
 
 Official installation instructions: https://www.azuracast.com/docs/getting-started/installation/docker/
 
@@ -101,7 +101,7 @@ curl -fsS http://127.0.0.1:8787/health
 
 The health endpoint must return `{\"ok\":true,...}`. Configure the host's existing HTTPS ingress to route a dedicated control hostname/path to `127.0.0.1:8787`. AzuraCast already owns its standard web ports in a normal installation, so do not start a second reverse proxy on ports 80/443 without first configuring the AzuraCast ingress deliberately. The public control endpoint must use HTTPS. The exact ingress rule depends on the selected host/domain setup and is intentionally not guessed here.
 
-The service exposes public `GET /api/now-playing`, authenticated `GET /api/admin/station`, and an authenticated, station-scoped proxy under `/api/admin/azuracast/station/{station_id}/files` and `/playlists`. Admin access is checked against the existing `user_profiles.is_admin` field on every request.
+The service exposes public `GET /api/now-playing`, authenticated `GET /api/admin/station`, `GET /api/admin/files`, `GET /api/admin/playlists`, and a station-scoped file/playlist metadata proxy. Media upload uses a separate `POST /api/admin/upload` JSON endpoint that accepts a safe relative media path and base64 file data; it rejects path traversal, unsupported extensions and files larger than 100 MiB by default. It calls AzuraCast's JSON `POST /api/station/{station_id}/files` endpoint, not the vulnerable Flow.js `/files/upload` endpoint. Admin access is checked against the existing `user_profiles.is_admin` field on every request.
 
 ## 7. API key and app integration
 
