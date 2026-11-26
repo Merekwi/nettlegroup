@@ -1,0 +1,19 @@
+services:
+  euromix-radio-control:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: euromix-radio-control
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8787:8787"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
