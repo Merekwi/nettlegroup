@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { safeMediaPath, decodeMediaFile } from "./media.js";
 
 test("accepts a safe music path and normalizes separators", () => {
-  assert.equal(safeMediaPath("Music\Track 01.mp3"), "Music/Track 01.mp3");
+  assert.equal(safeMediaPath("Music\\Track 01.mp3"), "Music/Track 01.mp3");
   assert.equal(safeMediaPath("Новые треки/Песня (live).flac"), "Новые треки/Песня (live).flac");
 });
 
