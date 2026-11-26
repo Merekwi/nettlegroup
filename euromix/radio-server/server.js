@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { Pool } from "pg";
 import { verifyEuromixToken } from "./auth.js";
 import { safeMediaPath, decodeMediaFile } from "./media.js";
+import { toAzuraStationPath } from "./azura-path.js";
 
 const PORT = Number(process.env.PORT || 8787);
 const SESSION_SECRET = process.env.SESSION_SECRET || "";
@@ -88,17 +89,6 @@ async function fetchAzura(path, options = {}) {
   return response;
 }
 
-function safeAzuraPath(pathname) {
-  const prefix = "/api/admin/azuracast/station/";
-  if (!pathname.startsWith(prefix)) return null;
-  const tail = pathname.slice(prefix.length);
-  const match = /^(\d+)\/(files|playlists)(?:\/(\d+)(?:\/(play))?)?$/.exec(tail);
-  if (!match || match[1] !== STATION_ID) return null;
-  const resource = match[2];
-  const id = match[3] || "";
-  const action = match[4] || "";
-  return "station/" + STATION_ID + "/" + resource + (id ? "/" + id : "") + (action ? "/" + action : "");
-}
 
 
 async function readJsonBody(req, maxBytes) {
@@ -153,7 +143,7 @@ async function uploadMedia(req, res) {
 }
 
 async function proxyAdminRequest(req, res, pathname, search) {
-  const relativePath = safeAzuraPath(pathname);
+  const relativePath = toAzuraStationPath(pathname, STATION_ID);
   if (!relativePath) return json(res, 404, { error: "route_not_found" });
 
   const method = req.method || "GET";
