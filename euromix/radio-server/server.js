@@ -2,6 +2,7 @@ import http from "node:http";
 import { Readable } from "node:stream";
 import { Pool } from "pg";
 import { verifyEuromixToken } from "./auth.js";
+import { safeMediaPath, decodeMediaFile } from "./media.js";
 
 const PORT = Number(process.env.PORT || 8787);
 const SESSION_SECRET = process.env.SESSION_SECRET || "";
@@ -99,16 +100,6 @@ function safeAzuraPath(pathname) {
   return "station/" + STATION_ID + "/" + resource + (id ? "/" + id : "") + (action ? "/" + action : "");
 }
 
-function safeMediaPath(value) {
-  if (typeof value !== "string") return null;
-  const path = value.trim().replace(/\\/g, "/");
-  if (!path || path.length > 240 || path.startsWith("/") || /^[A-Za-z]:/.test(path)) return null;
-  const parts = path.split("/");
-  if (parts.some(part => !part || part === "." || part === ".." || !/^[\p{L}\p{N} _().-]+$/u.test(part))) return null;
-  const ext = parts[parts.length - 1].split(".").pop().toLowerCase();
-  if (!["mp3", "m4a", "aac", "ogg", "opus", "flac", "wav"].includes(ext)) return null;
-  return parts.join("/");
-}
 
 async function readJsonBody(req, maxBytes) {
   const chunks = [];
@@ -144,15 +135,8 @@ async function uploadMedia(req, res) {
   if (!path) return json(res, 400, { error: "invalid_media_path" });
 
   const encoded = input.file;
-  if (typeof encoded !== "string" || !encoded.length || encoded.length > maxEncodedBytes ||
-      encoded.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
-    return json(res, 400, { error: "invalid_media_data" });
-  }
-
-  const bytes = Buffer.from(encoded, "base64");
-  if (!bytes.length || bytes.length > MAX_UPLOAD_BYTES || bytes.toString("base64") !== encoded) {
-    return json(res, 413, { error: "upload_too_large_or_invalid", maxBytes: MAX_UPLOAD_BYTES });
-  }
+  const bytes = decodeMediaFile(encoded, MAX_UPLOAD_BYTES);
+  if (!bytes) return json(res, 400, { error: "invalid_media_data_or_size", maxBytes: MAX_UPLOAD_BYTES });
 
   const result = await fetchAzura("station/" + STATION_ID + "/files", {
     method: "POST",
