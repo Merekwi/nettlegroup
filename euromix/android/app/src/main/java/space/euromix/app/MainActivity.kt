@@ -71,18 +71,21 @@ private object SecureTokenStore {
         return generator.generateKey()
     }
 
-    fun read(context: Context): String? = try {
-        val encoded = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(TOKEN, null) ?: return null
-        val bytes = Base64.decode(encoded, Base64.NO_WRAP)
-        if (bytes.size <= 12) return null
-        val iv = bytes.copyOfRange(0, 12)
-        val encrypted = bytes.copyOfRange(12, bytes.size)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
-        String(cipher.doFinal(encrypted), Charsets.UTF_8)
-    } catch (_: Exception) {
-        clear(context)
-        null
+    fun read(context: Context): String? {
+        return try {
+            val encoded = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(TOKEN, null)
+                ?: return null
+            val bytes = Base64.decode(encoded, Base64.NO_WRAP)
+            if (bytes.size <= 12) return null
+            val iv = bytes.copyOfRange(0, 12)
+            val encrypted = bytes.copyOfRange(12, bytes.size)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
+            String(cipher.doFinal(encrypted), Charsets.UTF_8)
+        } catch (_: Exception) {
+            clear(context)
+            null
+        }
     }
 
     fun save(context: Context, token: String) {
@@ -155,7 +158,7 @@ class MainActivity : ComponentActivity() {
                                 onVerify = { openVerify() },
                                 onAdmin = { page = "admin" }
                             )
-                            "admin" -> if (isAdmin) AdminPage() else RadioPage(
+                            "admin" -> if (adminState) AdminPage() else RadioPage(
                                 playing, notice, trackTitle, trackArtist,
                                 onToggle = { if (Config.STREAM_URL.isNotBlank()) { if (player.isPlaying) player.pause() else player.play() } }
                             )
