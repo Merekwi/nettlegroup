@@ -13,7 +13,7 @@ android {
         versionCode = 3
         versionName = "0.3.0"
     }
-    buildFeatures { compose = true }
+    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n    kotlinOptions { jvmTarget = "17" }\n    buildFeatures { compose = true }
 }
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
