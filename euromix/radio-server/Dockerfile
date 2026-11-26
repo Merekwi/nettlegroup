@@ -6,7 +6,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev --no-audit --no-fund
 
-COPY auth.js server.js ./
+COPY auth.js media.js server.js ./
 USER node
 
 EXPOSE 8787
