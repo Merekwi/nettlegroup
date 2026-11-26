@@ -1,61 +1,52 @@
 # Nettle Group API — Neon Functions
 
-The existing website remains on GitHub Pages at `https://www.nettlegroup.space/`. The API is deployed inside the existing Neon project `nettlegroup` and uses `nettle_main`. **No Vercel project or extra hosting provider is needed.**
+The public site remains on GitHub Pages at `https://www.nettlegroup.space/`. The API is deployed to the existing Neon project `nettlegroup`, database `nettle_main`. No additional hosting provider is used for the API.
 
 ## Current deployment
 
 - Neon project: `dry-shape-51006688`
 - Main branch: `br-little-union-b9iipjfz`
 - Function slug: `nettleapi`
-- Active deployment: `4` (Node.js 24; deployment status `completed`)
-- Native function URL: https://br-little-union-b9iipjfz-nettleapi.compute.c-7.eu-central-1.aws.neon.tech/
-- Custom domain binding: `api.nettlegroup.space` (registered, DNS currently points elsewhere / is not configured)
-- `DATABASE_URL` is injected by Neon at runtime.
-- Server environment already configured: `SITE_ORIGIN`, `COOKIE_DOMAIN`, `INITIAL_ADMIN_TELEGRAM_ID`, `SESSION_SECRET`.
-- **Still missing:** `TELEGRAM_BOT_TOKEN` must be added as a secret in the Neon Function environment; the bot token has not been put in GitHub or this document.
+- Active deployment: `60` (Node.js 24, completed 2026-11-26)
+- Native invocation URL: `https://br-little-union-b9iipjfz-nettleapi.compute.c-7.eu-central-1.aws.neon.tech/`
+- Custom domain: `api.nettlegroup.space` (Neon reports binding active and DNS status OK)
+- `DATABASE_URL` is injected by Neon.
+- Runtime environment includes `SITE_ORIGIN`, `INITIAL_ADMIN_TELEGRAM_ID`, `SESSION_SECRET`, and `TELEGRAM_BOT_TOKEN`. Values are stored as secrets and must never be copied into source control.
+- Private Neon Object Storage bucket: `euromix-media`.
 
-## One DNS change required
+## Telegram sign-in
 
-At the DNS provider managing `nettlegroup.space`, create/update this record:
+The existing Telegram Login Widget is used through `euromix-login.html` at `https://www.nettlegroup.space/euromix-login.html`.
 
-| Type | Name / Host | Target / Value |
-|---|---|---|
-| CNAME | `api` | `fn-custom-domains.eu-central-1.aws.neon.tech` |
+1. In @BotFather, verify that the Telegram Login Widget domain is configured as `www.nettlegroup.space`.
+2. Keep `TELEGRAM_BOT_TOKEN` in the Neon Function environment. Never put it in Android resources, JavaScript, or GitHub source.
+3. The web page posts the Telegram widget payload to `POST /api/auth/telegram`. The API validates the Telegram signature and sets the existing HttpOnly session cookie.
+4. The page requests `POST /api/auth/mobile/code`. The API creates a cryptographically random one-time code, stores only its SHA-256 hash, and expires it after 90 seconds.
+5. The page returns to Android with `euromix://auth/success?code=...`.
+6. Android redeems the code at `POST /api/auth/mobile/exchange`. The code is consumed atomically and can be used once. The API returns a signed 30-day Bearer token with audience `euromix`.
+7. Android stores the token encrypted with an Android Keystore AES key. `GET /api/session` returns the current server-side role; client-side state is not an authorization source.
 
-Do not change the existing `www` record or root-domain records. Neon currently reports `cname-not-pointing-at-edge`; the API custom domain will not work until the CNAME points to the target above and DNS propagates.
-
-## Finish Telegram login
-
-1. Open @BotFather and configure the Telegram Login Widget domain as `www.nettlegroup.space`.
-2. In the Neon dashboard, open project `nettlegroup` → main branch → Functions → `nettleapi` → environment/secrets.
-3. Add `TELEGRAM_BOT_TOKEN` using the token from @BotFather. **Do not paste it into chat, commit it to GitHub, or place it in browser JavaScript.**
-4. Redeploy the function after adding the variable. Keep the already-configured variables listed above.
-5. The first verified login for Telegram ID `6393320839` receives initial admin status. Admin privileges are checked against `user_profiles.is_admin` on each admin request.
-
-## Smoke tests
-
-After the CNAME and bot token are configured:
-
-- Open `https://api.nettlegroup.space/api/session`; without a session it should return `authenticated: false`.
-- Open `https://www.nettlegroup.space/account.html` and sign in through Telegram.
-- Create a dummy service, payment method and ticket.
-- Pressing “Я оплатил” must only submit a ticket; it must not grant access.
-- Test approval and rejection (rejection requires a comment).
+The `euromix_auth_codes` table is defined in `database/migrations/2026-11-26-euromix-auth-codes.sql` and in the baseline `database/schema.sql`.
 
 ## API routes
 
 - `POST /api/auth/telegram`, `POST /api/auth/logout`, `GET /api/session`
+- `POST /api/auth/mobile/code`, `POST /api/auth/mobile/exchange`
 - `GET /api/services`, `GET /api/payment-methods`
 - `GET/POST /api/tickets`, `POST /api/ticket-paid`
-- `POST /api/admin/ticket-decision` — admin-only; rejection requires a comment; approval creates a service grant transactionally
-- `POST /api/admin/services`, `POST /api/admin/service-update`
-- `POST /api/admin/payment-methods`, `POST /api/admin/payment-method-update`
-- `GET/POST /api/admin/grants`
+- Existing admin routes under `/api/admin/*`
 
-## Important
+## Current verification and known blockers
 
-- Function source of truth: `neon-function/index.mjs` and `neon-function/api-handler.cjs`; config: `neon.ts`.
-- This uses Telegram Login Widget, not a bot-issued one-time-code flow.
-- A “paid” submission is not proof of payment. Only admin approval grants access; no payment-provider webhook is configured.
-- The function deployment is active, but the login/payment flow has **not yet been end-to-end verified** because the custom DNS record and bot token are still missing.
-- Durable rate limiting and additional production hardening remain outstanding.
+- The Function deployment itself completed successfully as deployment `60`.
+- The post-deploy smoke test currently receives HTTP `402` from the Neon Function invocation host before it can verify CORS or `/api/session`. Function logs returned no records, so the exact exhausted allowance or platform restriction is not visible from the Free-plan diagnostics available here. Do not mark the native sign-in flow production-verified until the endpoint returns normally.
+- Neon Free includes monthly Function capacity allowances. Check the project's usage/limits in the Neon Console before changing billing. No plan or billing changes are made automatically by this repository.
+- The Login Widget domain registration in @BotFather still needs to be confirmed manually.
+- The radio playback URL is intentionally not configured until an actual radio stream host is provisioned. Do not put a placeholder URL into `STREAM_URL`.
+
+## Safety notes
+
+- The API must continue to validate `Origin` for cookie-based authentication and state-changing browser routes.
+- Never put `TELEGRAM_BOT_TOKEN`, `SESSION_SECRET`, or a database connection string in the Android app or browser JavaScript.
+- A verified Telegram identity and the database `is_admin` field are the source of admin authorization. Hiding UI elements alone is not authorization.
+- A payment submission is not proof of payment. Only admin approval grants access.
