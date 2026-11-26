@@ -86,7 +86,7 @@ The richer rotation policy in [ROTATION.md](../radio-engine/ROTATION.md) remains
 
 ## 6. Deploy the private Euromix control API
 
-The control service runs separately from AzuraCast and connects to the same Neon user table. It listens only on `127.0.0.1:8787` on the host; do not expose that port directly to the internet.
+The control service runs separately from AzuraCast and connects to the same Neon user table. It is not published on a host port; only Caddy can reach it through a private Docker network.
 
 After the station exists, copy the folder to the VPS (or pull the repository) and create a private `.env` file:
 
