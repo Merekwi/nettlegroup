@@ -82,7 +82,7 @@ async function fetchAzura(path, options = {}) {
       authorization: "Bearer " + AZURACAST_API_KEY,
       ...(options.headers || {})
     },
-    signal: AbortSignal.timeout(20_000)
+    signal: AbortSignal.timeout(options.body ? 10 * 60_000 : 20_000)
   });
   return response;
 }
