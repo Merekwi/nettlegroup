@@ -101,7 +101,7 @@ curl -fsS http://127.0.0.1:8787/health
 
 The health endpoint must return `{\"ok\":true,...}`. Configure the host's existing HTTPS ingress to route a dedicated control hostname/path to `127.0.0.1:8787`. AzuraCast already owns its standard web ports in a normal installation, so do not start a second reverse proxy on ports 80/443 without first configuring the AzuraCast ingress deliberately. The public control endpoint must use HTTPS. The exact ingress rule depends on the selected host/domain setup and is intentionally not guessed here.
 
-The service exposes public `GET /api/now-playing`, authenticated `GET /api/admin/station`, `GET /api/admin/files`, `GET /api/admin/playlists`, and a station-scoped file/playlist metadata proxy. Media upload uses a separate `POST /api/admin/upload` JSON endpoint that accepts a safe relative media path and base64 file data; it rejects path traversal, unsupported extensions and files larger than 100 MiB by default. It calls AzuraCast's JSON `POST /api/station/{station_id}/files` endpoint, not the vulnerable Flow.js `/files/upload` endpoint. Admin access is checked against the existing `user_profiles.is_admin` field on every request.
+The service exposes public `GET /api/now-playing`, authenticated `GET /api/admin/station`, `GET /api/admin/files`, `GET /api/admin/playlists`, and a station-scoped file/playlist metadata proxy. Media upload uses a separate `POST /api/admin/upload` JSON endpoint that accepts a safe relative media path and base64 file data; it rejects path traversal, unsupported extensions and files larger than 18 MiB by default. This fits AzuraCast's documented default 25M PHP request limit and 50M NGINX request-body limit after base64 encoding. Larger individual files require raising the corresponding AzuraCast limits in `azuracast.env` and `.env`, then restarting the AzuraCast Docker Compose stack. It calls AzuraCast's JSON `POST /api/station/{station_id}/files` endpoint, not the vulnerable Flow.js `/files/upload` endpoint. Admin access is checked against the existing `user_profiles.is_admin` field on every request.
 
 ## 7. API key and app integration
 
@@ -113,6 +113,8 @@ After the station is running:
 5. Connect the Euromix control API to AzuraCast and NettleGroup's existing user database. That API must verify the existing Euromix bearer token and read the user's current `is_admin` value from the shared user profile table before allowing management actions.
 
 The app's current stream URL is intentionally blank. It should be changed only after the actual mount URL has been copied from the installed station and tested from an external network.
+
+To raise the per-file limit later, edit AzuraCast's `azuracast.env` (`PHP_MAX_FILE_SIZE`, `PHP_MEMORY_LIMIT`) and `.env` (`NGINX_CLIENT_MAX_BODY_SIZE`) together. Do not raise only the Euromix API limit: the AzuraCast reverse proxy or PHP process may still reject the body. AzuraCast documents restarting after environment edits with `docker-compose down` followed by `docker-compose up -d`; schedule this as a short maintenance window.
 
 ## 8. Backups and operations
 
