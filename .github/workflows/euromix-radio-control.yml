@@ -41,3 +41,9 @@ jobs:
       - name: Build control API container
         working-directory: euromix/radio-server
         run: docker build --tag euromix-radio-control:ci .
+      - name: Validate Compose configuration
+        working-directory: euromix/radio-server
+        env:
+          RADIO_DOMAIN: radio.example.com
+          RADIO_CONTROL_DOMAIN: radio-control.example.com
+        run: docker compose config --quiet
