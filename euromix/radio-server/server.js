@@ -13,7 +13,7 @@ const AZURACAST_API_KEY = process.env.AZURACAST_API_KEY || "";
 const STATION_ID = String(process.env.EUROMIX_AZURACAST_STATION_ID || "");
 const STATION_SHORTCODE = process.env.EUROMIX_AZURACAST_STATION_SHORTCODE || "euromix";
 const ALLOWED_ORIGIN = process.env.EUROMIX_ALLOWED_ORIGIN || "https://www.nettlegroup.space";
-const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 100 * 1024 * 1024);
+const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 18 * 1024 * 1024);
 
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error("PORT is invalid");
 if (!SESSION_SECRET || SESSION_SECRET.length < 32) throw new Error("SESSION_SECRET must be at least 32 characters");
