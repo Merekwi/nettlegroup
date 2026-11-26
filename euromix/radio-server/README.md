@@ -12,11 +12,16 @@ This directory contains the deployment foundation for Euromix's own 24/7 radio s
 
 AzuraCast is the radio engine, not the public Euromix brand. The long-term control surface remains Euromix. The engine can be replaced later without changing the app's single-stream model.
 
+- **Radio control API**: a small Node service that reads public now-playing data and proxies media/playlist management to AzuraCast without exposing its API key. For every admin request it verifies the existing Euromix HMAC bearer token and re-reads `user_profiles.is_admin` from the shared Neon database.
+
 ## What's in this folder
 
 - `install-azuracast.sh`: official installer bootstrap for a fresh Linux VPS.
 - `DEPLOY.md`: initial server and station setup checklist.
 - `.env.example`: names and examples for values that will be needed when the server is provisioned. It contains no secrets.
+- `server.js` / `auth.js`: the private radio-control API and shared-token verifier.
+- `docker-compose.yml` / `Dockerfile`: container definition for the control API.
+- `auth.test.js`: automated checks for token verification.
 
 ## Server sizing
 
@@ -31,5 +36,7 @@ At 128 kbit/s, one listener connected continuously for 30 days consumes about 41
 - The existing Kotlin `RotationPolicy` is a specification/prototype, not a server-side playout worker. It does not currently control the live stream.
 - AzuraCast supports general rotation, scheduled playlists and playlists that run every N songs or minutes. Exact artist/genre cooldown scoring and the full custom jingle policy in `../radio-engine/ROTATION.md` still need a Euromix-specific server-side layer and validation on a running station.
 - Radio licensing and royalty obligations depend on where Euromix operates and where listeners are located. The operator must secure the required rights before streaming copyrighted music. AzuraCast does not provide music rights.
+
+Admin API routes are restricted to the configured station's `files` and `playlists` resources. No arbitrary AzuraCast URL can be proxied, and the API key is never returned to the client. The adapter listens on localhost port 8787 by default; it must be placed behind an HTTPS reverse proxy before remote app clients can use it.
 
 See [DEPLOY.md](./DEPLOY.md) before bringing up the server.
