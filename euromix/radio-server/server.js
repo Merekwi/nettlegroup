@@ -22,7 +22,7 @@ if (!AZURACAST_API_URL || !AZURACAST_API_KEY || !/^\d+$/.test(STATION_ID)) {
   throw new Error("AzuraCast API URL, API key and numeric station ID are required");
 }
 const apiUrl = new URL(AZURACAST_API_URL);
-if (apiUrl.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(apiUrl.hostname)) {
+if (apiUrl.protocol !== "https:" && !["localhost", "127.0.0.1", "host.docker.internal"].includes(apiUrl.hostname)) {
   throw new Error("AzuraCast API must use HTTPS");
 }
 
