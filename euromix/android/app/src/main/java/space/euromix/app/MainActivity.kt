@@ -1,6 +1,22 @@
 package space.euromix.app
 
 import android.content.Intent
+import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import kotlinx.coroutines.*
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.io.IOException
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -33,12 +49,76 @@ private val Background = Color(0xFF090A12)
 private val SurfaceDark = Color(0xFF151725)
 private val Muted = Color(0xFF9296AA)
 
+private object SecureTokenStore {
+    private const val PREFS = "euromix_secure"
+    private const val TOKEN = "access_token"
+    private const val KEY_ALIAS = "EuromixSessionKey"
+
+    @Synchronized
+    private fun key(): SecretKey {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        val spec = KeyGenParameterSpec.Builder(
+            KEY_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setRandomizedEncryptionRequired(true)
+            .build()
+        generator.init(spec)
+        return generator.generateKey()
+    }
+
+    fun read(context: Context): String? = try {
+        val encoded = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(TOKEN, null) ?: return null
+        val bytes = Base64.decode(encoded, Base64.NO_WRAP)
+        if (bytes.size <= 12) return null
+        val iv = bytes.copyOfRange(0, 12)
+        val encrypted = bytes.copyOfRange(12, bytes.size)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
+        String(cipher.doFinal(encrypted), Charsets.UTF_8)
+    } catch (_: Exception) {
+        clear(context)
+        null
+    }
+
+    fun save(context: Context, token: String) {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key())
+        val encrypted = cipher.doFinal(token.toByteArray(Charsets.UTF_8))
+        val combined = cipher.iv + encrypted
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(TOKEN, Base64.encodeToString(combined, Base64.NO_WRAP)).apply()
+    }
+
+    fun clear(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(TOKEN).apply()
+    }
+}
+
 class MainActivity : ComponentActivity() {
     private lateinit var player: ExoPlayer
+    private val http = OkHttpClient()
+    private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var accessToken: String? = null
+    private var accountNameState by mutableStateOf<String?>(null)
+    private var adminState by mutableStateOf(false)
+    private var authNoticeState by mutableStateOf("Войдите через NettleGroup Verify")
+    private var authBusyState by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        accessToken = SecureTokenStore.read(this)
         player = ExoPlayer.Builder(this).build()
+        val incomingCode = intent?.data?.getQueryParameter("code")
+        if (!incomingCode.isNullOrBlank()) {
+            consumeAuthCode(incomingCode)
+        } else if (accessToken != null) {
+            refreshSession()
+        }
         if (Config.STREAM_URL.isNotBlank()) {
             player.setMediaItem(MediaItem.fromUri(Config.STREAM_URL))
             player.prepare()
@@ -47,8 +127,6 @@ class MainActivity : ComponentActivity() {
             var playing by remember { mutableStateOf(false) }
             var notice by remember { mutableStateOf(if (Config.STREAM_URL.isBlank()) "Подключаем радиостанцию" else "Подключение к прямому эфиру") }
             var page by remember { mutableStateOf("radio") }
-            var accountName by remember { mutableStateOf<String?>(null) }
-            var isAdmin by remember { mutableStateOf(false) }
             var trackTitle by remember { mutableStateOf("Музыка без границ") }
             var trackArtist by remember { mutableStateOf("Euromix Radio") }
 
@@ -70,15 +148,11 @@ class MainActivity : ComponentActivity() {
                         TopBar(onAccount = { page = if (page == "account") "radio" else "account" }, onRadio = { page = "radio" }, accountPage = page == "account")
                         when (page) {
                             "account" -> AccountPage(
-                                accountName = accountName,
-                                isAdmin = isAdmin,
-                                onVerify = {
-                                    if (Config.VERIFY_URL.isNotBlank()) {
-                                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(Config.VERIFY_URL)))
-                                    } else {
-                                        notice = "Авторизация NettleGroup Verify будет доступна после подключения защищённого входа"
-                                    }
-                                },
+                                accountName = accountNameState,
+                                isAdmin = adminState,
+                                notice = authNoticeState,
+                                loading = authBusyState,
+                                onVerify = { openVerify() },
                                 onAdmin = { page = "admin" }
                             )
                             "admin" -> if (isAdmin) AdminPage() else RadioPage(
@@ -99,7 +173,107 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val uri = intent.data ?: return
+        if (uri.scheme == "euromix" && uri.host == "auth" && uri.path == "/success") {
+            uri.getQueryParameter("code")?.let { code ->
+                if (code.isNotBlank()) consumeAuthCode(code)
+            }
+        }
+    }
+
+    private fun openVerify() {
+        if (Config.VERIFY_URL.isBlank()) {
+            authNoticeState = "Ссылка входа пока не настроена"
+            return
+        }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(Config.VERIFY_URL)))
+        } catch (_: Exception) {
+            authNoticeState = "Не удалось открыть страницу входа"
+        }
+    }
+
+    private fun consumeAuthCode(code: String) {
+        authBusyState = true
+        authNoticeState = "Подтверждаем вход…"
+        intent?.data = null
+        activityScope.launch {
+            try {
+                val json = withContext(Dispatchers.IO) {
+                    val body = JSONObject().put("code", code).toString()
+                        .toRequestBody("application/json; charset=utf-8".toMediaType())
+                    val request = Request.Builder()
+                        .url(Config.API_BASE.trimEnd('/') + "/api/auth/mobile/exchange")
+                        .post(body)
+                        .build()
+                    http.newCall(request).execute().use { response ->
+                        val raw = response.body?.string().orEmpty()
+                        val result = JSONObject(raw.ifBlank { "{}" })
+                        if (!response.isSuccessful) {
+                            throw IOException(result.optString("error", "Не удалось подтвердить вход"))
+                        }
+                        result
+                    }
+                }
+                val token = json.getString("accessToken")
+                val user = json.getJSONObject("user")
+                SecureTokenStore.save(this@MainActivity, token)
+                accessToken = token
+                accountNameState = user.optString("displayName", "Пользователь")
+                adminState = user.optBoolean("isAdmin", false)
+                authNoticeState = "Аккаунт подключён"
+            } catch (error: Exception) {
+                authNoticeState = when (error.message) {
+                    "invalid_or_expired_code" -> "Ссылка входа устарела. Нажмите «Войти» ещё раз."
+                    else -> "Не удалось войти. Повторите попытку."
+                }
+            } finally {
+                authBusyState = false
+                intent?.data = null
+            }
+        }
+    }
+
+    private fun refreshSession() {
+        val token = accessToken ?: return
+        activityScope.launch {
+            try {
+                val json = withContext(Dispatchers.IO) {
+                    val request = Request.Builder()
+                        .url(Config.API_BASE.trimEnd('/') + "/api/session")
+                        .header("Authorization", "Bearer " + token)
+                        .get()
+                        .build()
+                    http.newCall(request).execute().use { response ->
+                        val raw = response.body?.string().orEmpty()
+                        val result = JSONObject(raw.ifBlank { "{}" })
+                        if (!response.isSuccessful) throw IOException("session_unavailable")
+                        result
+                    }
+                }
+                if (!json.optBoolean("authenticated", false) || json.isNull("user")) {
+                    SecureTokenStore.clear(this@MainActivity)
+                    accessToken = null
+                    accountNameState = null
+                    adminState = false
+                    authNoticeState = "Сессия истекла. Войдите снова."
+                } else {
+                    val user = json.getJSONObject("user")
+                    accountNameState = user.optString("displayName", "Пользователь")
+                    adminState = user.optBoolean("isAdmin", false)
+                    authNoticeState = "Аккаунт подключён"
+                }
+            } catch (_: Exception) {
+                authNoticeState = "Нет связи с сервером. Проверьте подключение."
+            }
+        }
+    }
+
     override fun onDestroy() {
+        activityScope.cancel()
         player.release()
         super.onDestroy()
     }
@@ -196,7 +370,7 @@ private fun RadioPage(
 }
 
 @Composable
-private fun AccountPage(accountName: String?, isAdmin: Boolean, onVerify: () -> Unit, onAdmin: () -> Unit) {
+private fun AccountPage(accountName: String?, isAdmin: Boolean, notice: String, loading: Boolean, onVerify: () -> Unit, onAdmin: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(22.dp)) {
         Spacer(Modifier.height(12.dp))
         Text("Аккаунт", fontSize = 30.sp, fontWeight = FontWeight.Bold)
@@ -207,12 +381,14 @@ private fun AccountPage(accountName: String?, isAdmin: Boolean, onVerify: () -> 
                 Icon(Icons.Outlined.AccountCircle, contentDescription = null, tint = Violet, modifier = Modifier.size(42.dp))
                 Spacer(Modifier.height(14.dp))
                 Text(accountName ?: "Гость", fontSize = 21.sp, fontWeight = FontWeight.Bold)
-                Text(if (accountName == null) "Вы не вошли в NettleGroup" else "Аккаунт подтверждён", color = Muted, fontSize = 13.sp)
+                Text(if (accountName == null) "Вы не вошли в NettleGroup" else "Вход выполнен через Verify", color = Muted, fontSize = 13.sp)
+                Spacer(Modifier.height(10.dp))
+                Text(notice, color = Muted, fontSize = 12.sp)
                 Spacer(Modifier.height(18.dp))
-                Button(onClick = onVerify, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                Button(onClick = onVerify, enabled = !loading, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
                     Icon(Icons.Default.VerifiedUser, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text(if (accountName == null) "Войти через NettleGroup" else "Проверить аккаунт")
+                    Text(if (loading) "Подтверждаем вход…" else if (accountName == null) "Войти через NettleGroup Verify" else "Переподключить аккаунт")
                 }
             }
         }
