@@ -5,5 +5,5 @@
 
 {$RADIO_CONTROL_DOMAIN} {
     encode zstd gzip
-    reverse_proxy host.docker.internal:8787
+    reverse_proxy euromix-radio-control:8787
 }
