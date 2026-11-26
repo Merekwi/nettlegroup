@@ -91,11 +91,81 @@ function safeAzuraPath(pathname) {
   const prefix = "/api/admin/azuracast/station/";
   if (!pathname.startsWith(prefix)) return null;
   const tail = pathname.slice(prefix.length);
-  const match = /^(\d+)\/(files|playlists)(?:\/([A-Za-z0-9._/-]*))?$/.exec(tail);
+  const match = /^(\d+)\/(files|playlists)(?:\/(\d+)(?:\/(play))?)?$/.exec(tail);
   if (!match || match[1] !== STATION_ID) return null;
-  const remainder = match[3] || "";
-  if (remainder.split("/").some(part => part === "." || part === "..")) return null;
-  return "station/" + STATION_ID + "/" + match[2] + (remainder ? "/" + remainder : "");
+  const resource = match[2];
+  const id = match[3] || "";
+  const action = match[4] || "";
+  return "station/" + STATION_ID + "/" + resource + (id ? "/" + id : "") + (action ? "/" + action : "");
+}
+
+function safeMediaPath(value) {
+  if (typeof value !== "string") return null;
+  const path = value.trim().replace(/\\/g, "/");
+  if (!path || path.length > 240 || path.startsWith("/") || /^[A-Za-z]:/.test(path)) return null;
+  const parts = path.split("/");
+  if (parts.some(part => !part || part === "." || part === ".." || !/^[\p{L}\p{N} _().-]+$/u.test(part))) return null;
+  const ext = parts[parts.length - 1].split(".").pop().toLowerCase();
+  if (!["mp3", "m4a", "aac", "ogg", "opus", "flac", "wav"].includes(ext)) return null;
+  return parts.join("/");
+}
+
+async function readJsonBody(req, maxBytes) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) {
+      const error = new Error("request_too_large");
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  try {
+    const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_json");
+    return value;
+  } catch {
+    const error = new Error("invalid_json");
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
+async function uploadMedia(req, res) {
+  const contentType = String(req.headers["content-type"] || "").toLowerCase();
+  if (!contentType.startsWith("application/json")) {
+    return json(res, 415, { error: "application_json_required" });
+  }
+  const maxEncodedBytes = Math.ceil(MAX_UPLOAD_BYTES * 4 / 3) + 32_768;
+  const input = await readJsonBody(req, maxEncodedBytes);
+  const path = safeMediaPath(input.path);
+  if (!path) return json(res, 400, { error: "invalid_media_path" });
+
+  const encoded = input.file;
+  if (typeof encoded !== "string" || !encoded.length || encoded.length > maxEncodedBytes ||
+      encoded.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    return json(res, 400, { error: "invalid_media_data" });
+  }
+
+  const bytes = Buffer.from(encoded, "base64");
+  if (!bytes.length || bytes.length > MAX_UPLOAD_BYTES || bytes.toString("base64") !== encoded) {
+    return json(res, 413, { error: "upload_too_large_or_invalid", maxBytes: MAX_UPLOAD_BYTES });
+  }
+
+  const result = await fetchAzura("station/" + STATION_ID + "/files", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path, file: encoded })
+  });
+  const body = await result.text();
+  res.writeHead(result.status, {
+    "content-type": result.headers.get("content-type") || "application/json",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff"
+  });
+  res.end(body);
 }
 
 async function proxyAdminRequest(req, res, pathname, search) {
@@ -187,7 +257,7 @@ const server = http.createServer(async (req, res) => {
         return await proxyAdminRequest(req, res, "/api/admin/azuracast/station/" + STATION_ID + "/playlists", requestUrl.search);
       }
       if (req.method === "POST" && pathname === "/api/admin/upload") {
-        return await proxyAdminRequest(req, res, "/api/admin/azuracast/station/" + STATION_ID + "/files/upload", requestUrl.search);
+        return await uploadMedia(req, res);
       }
       const mediaParts = pathname.split("/");
       if (
@@ -213,6 +283,9 @@ const server = http.createServer(async (req, res) => {
     if (res.headersSent) {
       res.destroy();
       return;
+    }
+    if (error?.statusCode === 400 || error?.statusCode === 413) {
+      return json(res, error.statusCode, { error: error.message });
     }
     const unavailable = error?.name === "TimeoutError" || error?.name === "AbortError";
     json(res, unavailable ? 504 : 502, {
